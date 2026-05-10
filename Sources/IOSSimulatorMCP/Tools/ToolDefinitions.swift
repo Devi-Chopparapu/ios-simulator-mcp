@@ -148,15 +148,14 @@ enum ToolDefinitions {
     private static let wdaTools: [Tool] = [
         Tool(
             name: "start_wda",
-            description: "Start WebDriverAgent on the simulator so UI interaction tools become available.",
+            description: "Start WebDriverAgent on the simulator so UI interaction tools become available. wda_project_path defaults to the bundled Vendor/WebDriverAgent submodule.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "wda_project_path": .object(["type": .string("string"), "description": .string("Full path to WebDriverAgent.xcodeproj")]),
+                    "wda_project_path": .object(["type": .string("string"), "description": .string("Path to WebDriverAgent.xcodeproj (optional, defaults to bundled Vendor/WebDriverAgent)")]),
                     "udid": .object(["type": .string("string"), "description": .string("Simulator UDID (optional, uses booted sim)")]),
                     "port": .object(["type": .string("integer"), "description": .string("WDA HTTP port (default 8100)")]),
                 ]),
-                "required": .array([.string("wda_project_path")]),
             ])
         ),
         Tool(

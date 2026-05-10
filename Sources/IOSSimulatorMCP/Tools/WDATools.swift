@@ -3,9 +3,21 @@ import MCP
 
 // MARK: - start_wda
 
+/// Resolves the WDA project path: explicit arg > Vendor submodule > error.
+private func resolveWDAPath(_ args: [String: Value]?) -> String? {
+    if let explicit = args?["wda_project_path"]?.stringValue { return explicit }
+    let scriptDir = URL(fileURLWithPath: #file)
+        .deletingLastPathComponent()   // Tools/
+        .deletingLastPathComponent()   // IOSSimulatorMCP/
+        .deletingLastPathComponent()   // Sources/
+        .deletingLastPathComponent()   // repo root
+    let vendored = scriptDir.appendingPathComponent("Vendor/WebDriverAgent/WebDriverAgent.xcodeproj").path
+    return FileManager.default.fileExists(atPath: vendored) ? vendored : nil
+}
+
 func startWDA(_ args: [String: Value]?, simManager: SimulatorManager, wdaManager: WDAManager) async throws -> CallTool.Result {
-    guard let wdaPath = args?["wda_project_path"]?.stringValue else {
-        return .text("Error: 'wda_project_path' is required.")
+    guard let wdaPath = resolveWDAPath(args) else {
+        return .text("Error: 'wda_project_path' not specified and Vendor/WebDriverAgent submodule not found. Run Scripts/setup.sh first.")
     }
 
     let udid: String

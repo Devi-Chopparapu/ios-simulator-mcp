@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# setup.sh — one-time setup for ios-simulator-mcp (Option B: WDA via xcodebuild, no Appium)
+# setup.sh — one-time setup for ios-simulator-mcp
 set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+WDA_DIR="$REPO_DIR/Vendor/WebDriverAgent"
 
 echo "=== ios-simulator-mcp setup ==="
 
@@ -11,34 +15,29 @@ if ! command -v xcrun &>/dev/null; then
 fi
 echo "✅  Xcode: $(xcrun --version 2>&1 | head -1)"
 
-# ── 2. Check xcodebuild ───────────────────────────────────────────────────────
 if ! command -v xcodebuild &>/dev/null; then
   echo "❌  xcodebuild not found. Install Xcode from the App Store."
   exit 1
 fi
 echo "✅  xcodebuild: $(xcodebuild -version | head -1)"
 
-# ── 3. Clone WebDriverAgent (if not already present) ─────────────────────────
-WDA_DIR="${WDA_PATH:-$HOME/WebDriverAgent}"
-if [ -d "$WDA_DIR" ]; then
-  echo "✅  WebDriverAgent already at $WDA_DIR"
-else
-  echo "📥  Cloning WebDriverAgent → $WDA_DIR"
-  git clone https://github.com/appium/WebDriverAgent.git "$WDA_DIR"
-fi
+# ── 2. Init submodule (handles both fresh clone and missing --recurse-submodules) ──
+echo "📦  Initialising WebDriverAgent submodule (v12.2.2)..."
+git -C "$REPO_DIR" submodule update --init --recursive
+echo "✅  WebDriverAgent ready at $WDA_DIR"
 
-# ── 4. Bootstrap WDA (Carthage/SPM deps) ─────────────────────────────────────
+# ── 3. Bootstrap WDA dependencies ─────────────────────────────────────────────
 if [ -f "$WDA_DIR/Scripts/bootstrap.sh" ]; then
-  echo "🔧  Running WDA bootstrap..."
+  echo "🔧  Running WDA bootstrap (Carthage/SPM deps)..."
   pushd "$WDA_DIR" > /dev/null
   bash Scripts/bootstrap.sh
   popd > /dev/null
   echo "✅  WDA bootstrap complete"
 else
-  echo "⚠️   bootstrap.sh not found — WDA may not need it (newer versions use SPM)"
+  echo "ℹ️   No bootstrap.sh found — WDA uses SPM only, no extra step needed"
 fi
 
-# ── 5. Optional: libimobiledevice for real device support ─────────────────────
+# ── 4. Optional: libimobiledevice for real device support ─────────────────────
 if command -v brew &>/dev/null; then
   if ! command -v iproxy &>/dev/null; then
     echo "📦  Installing libimobiledevice (needed for real device USB port-forward)..."
@@ -47,13 +46,10 @@ if command -v brew &>/dev/null; then
     echo "✅  libimobiledevice already installed"
   fi
 else
-  echo "⚠️   Homebrew not found — skip libimobiledevice (only needed for real device)"
+  echo "ℹ️   Homebrew not found — skipping libimobiledevice (only needed for real device)"
 fi
 
-# ── 6. Build the MCP server ───────────────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(dirname "$SCRIPT_DIR")"
-
+# ── 5. Build the MCP server ───────────────────────────────────────────────────
 echo "🔨  Building ios-simulator-mcp (release)..."
 cd "$REPO_DIR"
 swift build -c release
@@ -68,13 +64,14 @@ echo "1. Add to Claude Code:"
 echo "   claude mcp add ios-simulator -- $BINARY"
 echo ""
 echo "2. Or add to Claude Desktop (~/.../claude_desktop_config.json):"
-echo "   {"
-echo "     \"mcpServers\": {"
-echo "       \"ios-simulator\": {"
-echo "         \"command\": \"$BINARY\""
-echo "       }"
-echo "     }"
-echo "   }"
+cat <<JSON
+   {
+     "mcpServers": {
+       "ios-simulator": {
+         "command": "$BINARY"
+       }
+     }
+   }
+JSON
 echo ""
-echo "3. Boot a simulator, then use the start_wda tool with:"
-echo "   wda_project_path: $WDA_DIR/WebDriverAgent.xcodeproj"
+echo "3. Boot a simulator in Xcode, then call the 'start_wda' tool — no arguments needed."
