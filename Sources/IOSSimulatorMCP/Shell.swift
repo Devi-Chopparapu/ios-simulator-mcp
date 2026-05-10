@@ -3,21 +3,23 @@ import Foundation
 enum ShellError: Error, LocalizedError {
     case commandFailed(output: String, exitCode: Int32)
     case commandNotFound(String)
+    case timeout(command: String, seconds: Int)
 
     var errorDescription: String? {
         switch self {
         case .commandFailed(let out, let code): return "Exit \(code): \(out)"
-        case .commandNotFound(let cmd): return "Not found: \(cmd)"
+        case .commandNotFound(let cmd):         return "Not found: \(cmd)"
+        case .timeout(let cmd, let secs):       return "Command timed out after \(secs)s: \(cmd)"
         }
     }
 }
 
-/// Runs a command asynchronously on a background thread so the async executor is not blocked.
-func shell(_ executable: String, _ arguments: [String] = [], input: String? = nil) async throws -> String {
+/// Runs a command asynchronously. Kills the process if it exceeds `timeout` seconds.
+func shell(_ executable: String, _ arguments: [String] = [], input: String? = nil, timeout: Int = 30) async throws -> String {
     try await withCheckedThrowingContinuation { continuation in
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let result = try shellSync(executable, arguments, input: input)
+                let result = try shellSync(executable, arguments, input: input, timeout: timeout)
                 continuation.resume(returning: result)
             } catch {
                 continuation.resume(throwing: error)
@@ -49,7 +51,7 @@ func launchBackground(_ executable: String, _ arguments: [String], outputHandler
 
 // MARK: - Private sync helper
 
-private func shellSync(_ executable: String, _ arguments: [String], input: String? = nil) throws -> String {
+private func shellSync(_ executable: String, _ arguments: [String], input: String? = nil, timeout: Int = 30) throws -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
@@ -69,7 +71,24 @@ private func shellSync(_ executable: String, _ arguments: [String], input: Strin
     }
 
     try process.run()
+
+    // Kill the process if it exceeds the timeout
+    let deadline = DispatchTime.now() + .seconds(timeout)
+    let killItem = DispatchWorkItem {
+        if process.isRunning {
+            log("[shell] timeout after \(timeout)s — killing \(executable) \(arguments.joined(separator: " "))")
+            process.terminate()
+        }
+    }
+    DispatchQueue.global().asyncAfter(deadline: deadline, execute: killItem)
+
     process.waitUntilExit()
+    killItem.cancel()
+
+    // If we killed it due to timeout, terminationReason is .uncaughtSignal
+    if process.terminationReason == .uncaughtSignal && process.terminationStatus != 0 {
+        throw ShellError.timeout(command: "\(executable) \(arguments.joined(separator: " "))", seconds: timeout)
+    }
 
     let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     let error  = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(),  encoding: .utf8) ?? ""

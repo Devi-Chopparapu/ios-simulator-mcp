@@ -4,7 +4,17 @@ import MCP
 // MARK: - list_simulators
 
 func listSimulators(_ args: [String: Value]?) async throws -> CallTool.Result {
-    let json = try await shell("/usr/bin/xcrun", ["simctl", "list", "devices", "--json"])
+    let json: String
+    do {
+        json = try await shell("/usr/bin/xcrun", ["simctl", "list", "devices", "--json"], timeout: 20)
+    } catch ShellError.timeout {
+        return .text("""
+            CoreSimulator timed out (>20s). The service may be stuck.
+            Fix: run this in Terminal, then retry:
+              sudo killall -9 com.apple.CoreSimulator.CoreSimulatorService
+            Or open Xcode once to wake it up.
+            """)
+    }
     guard let data = json.data(using: .utf8) else {
         return .text("Failed to parse simulator list")
     }
@@ -55,7 +65,7 @@ func bootSimulator(_ args: [String: Value]?, manager: SimulatorManager) async th
         return .text("Error: provide 'udid' or 'name' to identify the simulator to boot.")
     }
 
-    _ = try await shell("/usr/bin/xcrun", ["simctl", "boot", targetUDID])
+    _ = try await shell("/usr/bin/xcrun", ["simctl", "boot", targetUDID], timeout: 60)
     await manager.invalidateCache()
     return .text("Booted simulator \(targetUDID)")
 }
