@@ -231,18 +231,18 @@ enum ToolDefinitions {
         ),
         Tool(
             name: "press_button",
-            description: "Press a hardware button on the simulator (home, volumeup, volumedown, lock, siri).",
+            description: "Press a button on the simulator. Supported: 'home' and 'action' (via WDA); 'lock' and 'siri' (via Simulator.app menu bar — requires Accessibility permission). 'volumeup'/'volumedown' are not exposed by the simulator.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "name": .object(["type": .string("string"), "description": .string("Button name: 'home', 'volumeup', 'volumedown', 'lock', or 'siri'")]),
+                    "name": .object(["type": .string("string"), "description": .string("Button name: 'home', 'action', 'lock', or 'siri'")]),
                 ]),
                 "required": .array([.string("name")]),
             ])
         ),
         Tool(
             name: "shake",
-            description: "Perform a shake gesture on the simulator.",
+            description: "Perform a shake gesture on the simulator (clicks Simulator.app's Device → Shake menu via AppleScript — requires Accessibility permission).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),

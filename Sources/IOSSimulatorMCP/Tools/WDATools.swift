@@ -111,23 +111,63 @@ func tapAndType(_ args: [String: Value]?, wdaManager: WDAManager) async throws -
 
 // MARK: - press_button
 
+/// Press a button on the simulator.
+///
+/// The iOS Simulator only virtualises a tiny subset of physical buttons:
+///   - `home`, `action` — handled by WDA's pressButton endpoint (works in-process)
+///   - `lock`, `siri`   — only reachable via the Simulator.app menu bar (AppleScript)
+///   - `volumeup`, `volumedown` — not exposed by anything (no menu item, no simctl,
+///     no WDA support); we return a clear error rather than failing opaquely.
 func pressButton(_ args: [String: Value]?, wdaManager: WDAManager) async throws -> CallTool.Result {
-    guard let name = args?["name"]?.stringValue else {
-        return .text("Error: 'name' is required (home, volumeup, volumedown, lock, siri).")
+    guard let raw = args?["name"]?.stringValue else {
+        return .text("Error: 'name' is required (home, action, lock, siri).")
     }
-    let valid = ["home", "volumeup", "volumedown", "lock", "siri"]
-    guard valid.contains(name) else {
-        return .text("Error: invalid button '\(name)'. Valid options: \(valid.joined(separator: ", "))")
+    let name = raw.lowercased()
+
+    switch name {
+    case "home", "action":
+        try await wdaManager.pressButton(name)
+        return .text("Pressed button: \(name)")
+
+    case "lock":
+        try await clickSimulatorMenuItem([
+            (menu: "Device",   item: "Lock"),
+            (menu: "Hardware", item: "Lock Screen"),
+        ])
+        return .text("Pressed button: lock (via Simulator menu bar)")
+
+    case "siri":
+        try await clickSimulatorMenuItem([
+            (menu: "Device",   item: "Siri"),
+            (menu: "Features", item: "Siri"),
+            (menu: "Hardware", item: "Siri"),
+        ])
+        return .text("Pressed button: siri (via Simulator menu bar)")
+
+    case "volumeup", "volumedown":
+        return .text("""
+            Error: '\(name)' is not supported on the iOS Simulator. Volume hardware buttons \
+            are not exposed by simctl, WebDriverAgent, or the Simulator menu bar in modern \
+            Xcode. Use a real device for volume-button testing.
+            """)
+
+    default:
+        return .text("Error: invalid button '\(raw)'. Valid: home, action, lock, siri.")
     }
-    try await wdaManager.pressButton(name)
-    return .text("Pressed button: \(name)")
 }
 
 // MARK: - shake
 
+/// Shake gesture. WDA v12.2.2 has no `/wda/shake` endpoint, and simctl has no shake
+/// command, so we drive it via Simulator.app's menu bar (Device → Shake on modern
+/// Xcode, Hardware → Shake Device on older versions).
 func shake(_ args: [String: Value]?, wdaManager: WDAManager) async throws -> CallTool.Result {
-    try await wdaManager.shake()
-    return .text("Shake gesture performed.")
+    try await clickSimulatorMenuItem([
+        (menu: "Device",   item: "Shake"),
+        (menu: "Hardware", item: "Shake Device"),
+        (menu: "Hardware", item: "Shake Gesture"),
+    ])
+    return .text("Shake gesture performed (via Simulator menu bar).")
 }
 
 // MARK: - ui_describe_all

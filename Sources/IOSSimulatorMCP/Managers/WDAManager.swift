@@ -186,11 +186,65 @@ actor WDAManager {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
+    /// Describe the element at a point.
+    ///
+    /// WDA v12.2.2 has no `/wda/element/atCoordinate` endpoint, so we fetch the full
+    /// accessibility tree via `/source` and hit-test it ourselves. We return the
+    /// **smallest** bounding box that contains the point — that's the deepest (most
+    /// specific) element under the cursor, which is what callers actually want.
     func describeElement(x: Double, y: Double) async throws -> String {
-        let sid = try await session()
-        let body = WDACoordinateRequest(x: x, y: y)
-        let data = try await post("/session/\(sid)/wda/element/atCoordinate", body: body)
-        return String(data: data, encoding: .utf8) ?? "{}"
+        let xml = try await uiSource()
+        return Self.findElementAt(x: x, y: y, in: xml)
+    }
+
+    /// Walks the WDA source XML tree and returns a formatted description of the
+    /// smallest element whose bounding rect contains (x, y). Pure function — testable
+    /// without a live WDA. Made `nonisolated` so the recursive walk doesn't bounce
+    /// in and out of the actor's executor for every node.
+    nonisolated static func findElementAt(x: Double, y: Double, in xml: String) -> String {
+        guard let data = xml.data(using: .utf8),
+              let doc  = try? XMLDocument(data: data, options: []) else {
+            return "Failed to parse UI source XML."
+        }
+
+        var best: XMLElement?
+        var bestArea = Double.infinity
+
+        func contains(_ el: XMLElement) -> (rect: (Double, Double, Double, Double), area: Double)? {
+            guard
+                let ex = el.attribute(forName: "x")?.stringValue.flatMap(Double.init),
+                let ey = el.attribute(forName: "y")?.stringValue.flatMap(Double.init),
+                let ew = el.attribute(forName: "width")?.stringValue.flatMap(Double.init),
+                let eh = el.attribute(forName: "height")?.stringValue.flatMap(Double.init)
+            else { return nil }
+            guard x >= ex, x < ex + ew, y >= ey, y < ey + eh else { return nil }
+            return ((ex, ey, ew, eh), ew * eh)
+        }
+
+        // Use <= so when a child has the same bounds as its parent (Window inside App
+        // is the common case) we still descend to the deeper, more specific element.
+        func walk(_ node: XMLNode) {
+            if let el = node as? XMLElement, let hit = contains(el), hit.area <= bestArea {
+                bestArea = hit.area
+                best = el
+            }
+            for child in node.children ?? [] { walk(child) }
+        }
+
+        if let root = doc.rootElement() { walk(root) }
+
+        guard let match = best else {
+            return "No element found at (\(x), \(y))."
+        }
+
+        // Format the matched element's tag + attributes — skip empty values to keep
+        // the output readable.
+        var lines: [String] = ["Element: \(match.name ?? "unknown")"]
+        for attr in match.attributes ?? [] {
+            guard let n = attr.name, let v = attr.stringValue, !v.isEmpty else { continue }
+            lines.append("  \(n): \(v)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     func launchApp(bundleId: String) async throws {

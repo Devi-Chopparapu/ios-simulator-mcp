@@ -139,6 +139,40 @@ private func shellSync(_ executable: String, _ arguments: [String], input: Strin
     return output.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
+/// Click a menu item in Simulator.app via AppleScript.
+///
+/// The simulator does not virtualise volume, lock, siri, or shake as "buttons" that WDA
+/// or simctl can reach — they exist only as menu-bar items in Simulator.app. We try each
+/// (menu, item) candidate in order so different Xcode versions (which renamed the menus
+/// from "Hardware" → "Device" / "Features" / "I/O") all work.
+///
+/// Requires Accessibility permission for the parent process (System Settings → Privacy &
+/// Security → Accessibility). The first invocation will prompt the user.
+func clickSimulatorMenuItem(_ candidates: [(menu: String, item: String)]) async throws {
+    var lastError: Error?
+    for (menu, item) in candidates {
+        let script = """
+        tell application "Simulator" to activate
+        delay 0.15
+        tell application "System Events"
+            tell process "Simulator"
+                click menu item "\(item)" of menu "\(menu)" of menu bar 1
+            end tell
+        end tell
+        """
+        do {
+            _ = try await shell("/usr/bin/osascript", ["-e", script], timeout: 10)
+            return
+        } catch {
+            lastError = error
+        }
+    }
+    throw lastError ?? ShellError.commandFailed(
+        output: "No matching Simulator menu item found in any candidate path.",
+        exitCode: 1
+    )
+}
+
 /// Write to stderr — stdout is reserved for the MCP protocol channel.
 func log(_ message: String) {
     let stderr = FileHandle.standardError
