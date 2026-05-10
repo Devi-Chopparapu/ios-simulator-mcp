@@ -33,6 +33,13 @@ func startWDA(_ args: [String: Value]?, simManager: SimulatorManager, wdaManager
 
     try await wdaManager.start(udid: udid, wdaProjectPath: wdaPath, port: port)
     try await wdaManager.waitForReady()
+
+    // Eagerly create a WDA session now so the first tap/swipe doesn't have to wait,
+    // and so any session-creation failure surfaces here with a clear error rather than
+    // appearing as a confusing "WDA not started" failure inside a later interaction tool.
+    let sid = try await wdaManager.session()
+    log("[WDA] Session ready: \(sid)")
+
     return .text("WDA started and ready on port \(port) for simulator \(udid)")
 }
 
