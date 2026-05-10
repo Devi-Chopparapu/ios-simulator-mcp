@@ -174,7 +174,10 @@ func shake(_ args: [String: Value]?, wdaManager: WDAManager) async throws -> Cal
 
 func uiDescribeAll(_ args: [String: Value]?, wdaManager: WDAManager) async throws -> CallTool.Result {
     let source = try await wdaManager.uiSource()
-    return .text(source)
+    // Default: compact text list (~90% fewer tokens than raw XML).
+    // Pass raw=true to get the full WDA XML for debugging or fine-grained parsing.
+    let raw = args?["raw"]?.boolValue ?? false
+    return .text(raw ? source : WDAManager.compactUISource(source))
 }
 
 // MARK: - ui_describe_point

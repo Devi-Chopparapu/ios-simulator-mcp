@@ -183,6 +183,12 @@ actor WDAManager {
     func uiSource() async throws -> String {
         let sid = try await session()
         let data = try await get("/session/\(sid)/source")
+        // WDA wraps the XML in a JSON envelope: {"value": "<?xml...>", "sessionId": "..."}
+        // Unwrap it so callers get raw XML.
+        struct SourceResp: Decodable { let value: String }
+        if let resp = try? JSONDecoder().decode(SourceResp.self, from: data), !resp.value.isEmpty {
+            return resp.value
+        }
         return String(data: data, encoding: .utf8) ?? ""
     }
 
@@ -195,6 +201,128 @@ actor WDAManager {
     func describeElement(x: Double, y: Double) async throws -> String {
         let xml = try await uiSource()
         return Self.findElementAt(x: x, y: y, in: xml)
+    }
+
+    /// Convert the raw WDA source XML into a compact, token-efficient text list.
+    ///
+    /// The raw WDA XML for a typical screen is 5 000–15 000 tokens. Most of it is
+    /// structural noise (`traits`, `horizontalSizeClass`, empty identifiers, invisible
+    /// containers). This function filters and reformats it into one line per visible,
+    /// labelled element — typically 300–800 tokens for the same screen.
+    ///
+    /// Format per line:  `[Type]         "label"   (x,y  w×h)  [disabled]`
+    ///
+    /// Rules:
+    ///  - Skip invisible elements and their subtrees (`visible="false"`)
+    ///  - Skip Application / Window root containers (always span full screen, not useful)
+    ///  - Skip elements with empty name/label/value unless they are input fields
+    ///    (TextField, SecureTextField, TextArea, SearchField) — those appear even empty
+    ///    so the agent knows a text input exists at that location
+    ///  - Show placeholder text for empty input fields
+    ///  - Walk children of every element, so nested button labels and cell content appear
+    nonisolated static func compactUISource(_ xml: String) -> String {
+        guard let data = xml.data(using: .utf8),
+              let doc  = try? XMLDocument(data: data, options: []) else {
+            return "Failed to parse UI source XML."
+        }
+
+        // Root containers: never emit a line, but always descend.
+        let skipTypes: Set<String> = ["XCUIElementTypeApplication", "XCUIElementTypeWindow"]
+
+        // Input fields: emit a line even when the displayed value is empty.
+        let alwaysShow: Set<String> = [
+            "XCUIElementTypeTextField",
+            "XCUIElementTypeSecureTextField",
+            "XCUIElementTypeTextView",
+            "XCUIElementTypeSearchField",
+        ]
+
+        // Human-readable type names (strip the "XCUIElementType" prefix for unknowns).
+        func short(_ t: String) -> String {
+            switch t {
+            case "XCUIElementTypeButton":           return "Button"
+            case "XCUIElementTypeStaticText":       return "Text"
+            case "XCUIElementTypeTextField":        return "TextField"
+            case "XCUIElementTypeSecureTextField":  return "SecureField"
+            case "XCUIElementTypeTextView":         return "TextView"
+            case "XCUIElementTypeSearchField":      return "Search"
+            case "XCUIElementTypeImage":            return "Image"
+            case "XCUIElementTypeCell":             return "Cell"
+            case "XCUIElementTypeTable":            return "Table"
+            case "XCUIElementTypeCollectionView":   return "Collection"
+            case "XCUIElementTypeScrollView":       return "Scroll"
+            case "XCUIElementTypeNavigationBar":    return "NavBar"
+            case "XCUIElementTypeTabBar":           return "TabBar"
+            case "XCUIElementTypeToolbar":          return "Toolbar"
+            case "XCUIElementTypeSwitch":           return "Switch"
+            case "XCUIElementTypeSlider":           return "Slider"
+            case "XCUIElementTypeLink":             return "Link"
+            case "XCUIElementTypeAlert":            return "Alert"
+            case "XCUIElementTypeSheet":            return "Sheet"
+            case "XCUIElementTypeSegmentedControl": return "Segment"
+            case "XCUIElementTypePageIndicator":    return "PageDot"
+            case "XCUIElementTypeOther":            return "View"
+            default:
+                let prefix = "XCUIElementType"
+                return t.hasPrefix(prefix) ? String(t.dropFirst(prefix.count)) : t
+            }
+        }
+
+        var lines: [String] = []
+
+        func walk(_ node: XMLNode) {
+            guard let el = node as? XMLElement, let typeName = el.name else {
+                for child in node.children ?? [] { walk(child) }
+                return
+            }
+
+            // Descend into root containers without emitting a line.
+            if skipTypes.contains(typeName) {
+                for child in el.children ?? [] { walk(child) }
+                return
+            }
+
+            // Cut off invisible subtrees entirely.
+            guard el.attribute(forName: "visible")?.stringValue != "false" else { return }
+
+            let name        = el.attribute(forName: "name")?.stringValue            ?? ""
+            let label       = el.attribute(forName: "label")?.stringValue           ?? ""
+            let value       = el.attribute(forName: "value")?.stringValue           ?? ""
+            let placeholder = el.attribute(forName: "placeholderValue")?.stringValue ?? ""
+            let enabled     = el.attribute(forName: "enabled")?.stringValue != "false"
+
+            let displayLabel = [name, label, value].first(where: { !$0.isEmpty }) ?? ""
+            let isInput      = alwaysShow.contains(typeName)
+
+            // Skip contentless non-input elements — still walk their children.
+            if displayLabel.isEmpty && !isInput {
+                for child in el.children ?? [] { walk(child) }
+                return
+            }
+
+            let x = el.attribute(forName: "x")?.stringValue      ?? "?"
+            let y = el.attribute(forName: "y")?.stringValue       ?? "?"
+            let w = el.attribute(forName: "width")?.stringValue   ?? "?"
+            let h = el.attribute(forName: "height")?.stringValue  ?? "?"
+
+            // Left-pad the type tag to column 14 for easy scanning.
+            let tag  = "[\(short(typeName))]".padding(toLength: 14, withPad: " ", startingAt: 0)
+            let dis  = enabled ? "" : "  [disabled]"
+            let coords = "(\(x),\(y)  \(w)×\(h))"
+
+            let line: String
+            if displayLabel.isEmpty, !placeholder.isEmpty {
+                line = "\(tag) \"\"  \(coords)  placeholder:\"\(placeholder)\"\(dis)"
+            } else {
+                line = "\(tag) \"\(displayLabel)\"  \(coords)\(dis)"
+            }
+            lines.append(line)
+
+            for child in el.children ?? [] { walk(child) }
+        }
+
+        if let root = doc.rootElement() { walk(root) }
+        return lines.isEmpty ? "No visible UI elements found." : lines.joined(separator: "\n")
     }
 
     /// Walks the WDA source XML tree and returns a formatted description of the

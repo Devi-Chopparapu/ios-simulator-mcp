@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MCP Explained — iOS Simulator MCP</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --bg-2: #11141c;
+    --panel: #161a25;
+    --border: #232838;
+    --text: #e7ebf3;
+    --muted: #8b93a7;
+    --accent: #7aa2ff;
+    --accent-2: #b78bff;
+    --green: #5fd6a4;
+    --orange: #ffb86b;
+    --pink: #ff7ab6;
+    --code-bg: #0f1320;
+    --shadow: 0 20px 60px rgba(0,0,0,0.45);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    overflow: hidden;
+  }
+  body {
+    background:
+      radial-gradient(1200px 600px at 20% -10%, rgba(122,162,255,0.10), transparent 60%),
+      radial-gradient(900px 500px at 100% 110%, rgba(183,139,255,0.08), transparent 60%),
+      var(--bg);
+  }
+
+  /* Layout */
+  .deck { position: relative; width: 100vw; height: 100vh; }
+  .slide {
+    position: absolute; inset: 0;
+    padding: 56px 72px 96px;
+    display: none;
+    overflow-y: auto;
+    animation: fade .35s ease;
+  }
+  .slide.active { display: block; }
+  @keyframes fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  h1, h2, h3 { margin: 0 0 12px; line-height: 1.15; letter-spacing: -0.01em; }
+  h1 { font-size: 56px; font-weight: 800; }
+  h2 { font-size: 34px; font-weight: 700; }
+  h3 { font-size: 20px; font-weight: 600; color: var(--muted); margin-bottom: 24px; }
+  p { line-height: 1.55; color: #cdd3e1; }
+  .lead { font-size: 20px; color: #d8dce8; max-width: 900px; }
+  .muted { color: var(--muted); }
+
+  /* Chrome (top + bottom bar) */
+  .top {
+    position: absolute; top: 18px; left: 24px; right: 24px;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px; color: var(--muted); z-index: 50;
+  }
+  .top .brand { display: flex; gap: 8px; align-items: center; }
+  .top .pill {
+    padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px;
+    background: rgba(255,255,255,0.02);
+  }
+  .nav {
+    position: absolute; bottom: 18px; left: 24px; right: 24px;
+    display: flex; justify-content: space-between; align-items: center;
+    z-index: 50;
+  }
+  .nav .progress { flex: 1; margin: 0 16px; height: 3px; background: var(--border); border-radius: 999px; overflow: hidden; }
+  .nav .progress > div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .3s ease; }
+  .btn {
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 14px; border-radius: 10px; cursor: pointer; font-size: 13px;
+    transition: all .15s ease;
+  }
+  .btn:hover { border-color: var(--accent); color: white; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px; background: var(--bg-2); border: 1px solid var(--border);
+    padding: 2px 6px; border-radius: 4px;
+  }
+
+  /* Cards & grids */
+  .grid { display: grid; gap: 16px; }
+  .grid-2 { grid-template-columns: 1fr 1fr; }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+  }
+  .card h4 { margin: 0 0 8px; font-size: 16px; }
+  .card .tag {
+    display: inline-block; font-size: 11px; padding: 3px 8px;
+    border-radius: 999px; background: rgba(122,162,255,0.12);
+    color: var(--accent); border: 1px solid rgba(122,162,255,0.25);
+    margin-bottom: 10px;
+  }
+  .card .tag.purple { background: rgba(183,139,255,0.12); color: var(--accent-2); border-color: rgba(183,139,255,0.25); }
+  .card .tag.green  { background: rgba(95,214,164,0.12); color: var(--green); border-color: rgba(95,214,164,0.25); }
+  .card .tag.orange { background: rgba(255,184,107,0.12); color: var(--orange); border-color: rgba(255,184,107,0.25); }
+
+  /* Code blocks */
+  pre, code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    overflow: auto;
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 0;
+  }
+  .tok-key { color: #82aaff; }
+  .tok-str { color: #c3e88d; }
+  .tok-num { color: #f78c6c; }
+  .tok-com { color: #5c6373; font-style: italic; }
+  .tok-fn  { color: #ffcb6b; }
+  .tok-typ { color: #b78bff; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+  tbody tr:hover { background: rgba(255,255,255,0.02); }
+  td code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+
+  /* Filter input */
+  .filter {
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 12px; border-radius: 10px; font-size: 13px; width: 280px;
+    margin-bottom: 16px;
+  }
+  .filter:focus { outline: none; border-color: var(--accent); }
+
+  /* Big arrow callout */
+  .callout {
+    border-left: 3px solid var(--accent);
+    padding-left: 16px; margin: 16px 0;
+    color: #d8dce8;
+  }
+
+  /* Architecture diagram */
+  .diagram svg { width: 100%; height: auto; }
+  .pulse-dot {
+    fill: var(--accent);
+    animation: pulseDot 1.6s ease-in-out infinite;
+  }
+  @keyframes pulseDot {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+
+  /* Sequence steps */
+  .seq { display: flex; flex-direction: column; gap: 10px; counter-reset: step; }
+  .seq .step {
+    display: grid; grid-template-columns: 36px 1fr; gap: 14px; align-items: start;
+    padding: 12px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--panel);
+  }
+  .seq .step::before {
+    counter-increment: step; content: counter(step);
+    width: 28px; height: 28px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #0b0d12; font-weight: 700; font-size: 13px;
+    display: grid; place-items: center;
+  }
+
+  /* Prompts */
+  .prompt-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    cursor: pointer;
+    transition: all .15s ease;
+    position: relative;
+  }
+  .prompt-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .prompt-card .copy {
+    position: absolute; top: 12px; right: 12px;
+    font-size: 11px; color: var(--muted);
+  }
+  .prompt-card.copied .copy { color: var(--green); }
+  .prompt-card .quote { font-size: 15px; color: var(--text); font-style: italic; line-height: 1.5; }
+  .prompt-card .why { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+  /* Accordion (FAQ) */
+  details {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 8px;
+  }
+  details summary {
+    cursor: pointer;
+    font-weight: 600;
+    list-style: none;
+  }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before {
+    content: "▸"; display: inline-block; margin-right: 10px;
+    color: var(--accent); transition: transform .2s ease;
+  }
+  details[open] summary::before { transform: rotate(90deg); }
+  details p, details pre { margin-top: 12px; }
+
+  /* Title slide */
+  .title-slide { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; }
+  .title-slide h1 { font-size: 76px; max-width: 1100px; }
+  .title-slide .gradient {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2), var(--pink));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Two-column code/diagram */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+
+  /* Toggle backend */
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .tab {
+    padding: 8px 16px; border: 1px solid var(--border); background: var(--panel);
+    color: var(--muted); border-radius: 10px; cursor: pointer; font-size: 13px;
+  }
+  .tab.active { color: var(--text); border-color: var(--accent); background: rgba(122,162,255,0.08); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* Slide number indicator */
+  .slide-num { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="brand">
+    <span class="pill">MCP Explained</span>
+    <span class="pill">iOS Simulator MCP</span>
+  </div>
+  <div>
+    <span class="kbd">←</span> <span class="kbd">→</span> navigate &nbsp;·&nbsp;
+    <span class="kbd">F</span> fullscreen &nbsp;·&nbsp;
+    <span class="slide-num"><span id="cur">1</span> / <span id="tot">13</span></span>
+  </div>
+</div>
+
+<div class="deck" id="deck">
+
+  <!-- 1. TITLE -->
+  <section class="slide title-slide active">
+    <p class="muted" style="letter-spacing: 0.2em; text-transform: uppercase; font-size: 12px;">Engineering Deep Dive · EL10</p>
+    <h1>How <span class="gradient">MCP</span> works,<br/>and what our iOS Simulator MCP actually does.</h1>
+    <p class="lead" style="margin-top: 24px;">
+      A 13-slide tour: the protocol, the architecture, the dual backends (<code>xcrun simctl</code> + WebDriverAgent),
+      every tool we ship, and the prompts to demo it live.
+    </p>
+    <div style="margin-top: 36px; display: flex; gap: 12px;">
+      <button class="btn" onclick="goto(1)">Start →</button>
+      <button class="btn" onclick="goto(11)">Jump to demo prompts</button>
+      <button class="btn" onclick="goto(12)">Jump to Q&amp;A</button>
+    </div>
+  </section>
+
+  <!-- 2. WHAT IS MCP -->
+  <section class="slide">
+    <h3>SLIDE 1 · The 60-second pitch</h3>
+    <h2>What is MCP?</h2>
+    <p class="lead">
+      <strong>Model Context Protocol</strong> is an open standard from Anthropic for connecting AI assistants
+      to external tools, data, and systems. Think of it as <em>USB-C for LLMs</em>: one cable, many devices.
+    </p>
+
+    <div class="grid grid-3" style="margin-top: 28px;">
+      <div class="card">
+        <span class="tag">Wire format</span>
+        <h4>JSON-RPC 2.0</h4>
+        <p class="muted">Every message is a structured JSON request/response. Same shape whether the transport is stdio, HTTP, or SSE.</p>
+      </div>
+      <div class="card">
+        <span class="tag purple">Three primitives</span>
+        <h4>Tools · Resources · Prompts</h4>
+        <p class="muted">Tools = actions the model can call. Resources = read-only data. Prompts = reusable templates.</p>
+      </div>
+      <div class="card">
+        <span class="tag green">Transport-agnostic</span>
+        <h4>stdio (this MCP) · HTTP · SSE</h4>
+        <p class="muted">Our server speaks stdio: the host process pipes JSON in and out via stdin/stdout.</p>
+      </div>
+    </div>
+
+    <div class="callout" style="margin-top: 28px;">
+      <strong>Why it matters:</strong> before MCP, every AI app reinvented its own tool-calling layer.
+      Now Claude Desktop, Cursor, Claude Code, Cowork, and others can all talk to the <em>same</em> server we ship.
+    </div>
+  </section>
+
+  <!-- 3. ARCHITECTURE -->
+  <section class="slide">
+    <h3>SLIDE 2 · The big picture</h3>
+    <h2>How a request flows</h2>
+
+    <div class="diagram" style="margin-top: 16px;">
+      <svg viewBox="0 0 1100 380" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="grad1" x1="0" x2="1">
+            <stop offset="0%" stop-color="#7aa2ff" />
+            <stop offset="100%" stop-color="#b78bff" />
+          </linearGradient>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#8b93a7"/>
+          </marker>
+        </defs>
+
+        <!-- Claude -->
+        <rect x="20" y="140" width="190" height="100" rx="14" fill="#161a25" stroke="#232838"/>
+        <text x="115" y="180" text-anchor="middle" fill="#e7ebf3" font-size="18" font-weight="700">Claude</text>
+        <text x="115" y="205" text-anchor="middle" fill="#8b93a7" font-size="12">(MCP client)</text>
+
+        <!-- Arrow 1 -->
+        <line x1="215" y1="190" x2="345" y2="190" stroke="#8b93a7" stroke-width="1.5" marker-end="url(#arr)"/>
+        <text x="280" y="180" text-anchor="middle" fill="#8b93a7" font-size="11">JSON-RPC / stdio</text>
+        <circle class="pulse-dot" cx="280" cy="195" r="3" />
+
+        <!-- MCP server -->
+        <rect x="350" y="120" width="240" height="140" rx="14" fill="url(#grad1)" opacity="0.18" stroke="url(#grad1)" stroke-width="2"/>
+        <text x="470" y="155" text-anchor="middle" fill="#e7ebf3" font-size="18" font-weight="700">ios-simulator-mcp</text>
+        <text x="470" y="178" text-anchor="middle" fill="#8b93a7" font-size="12">(Swift binary)</text>
+        <text x="470" y="208" text-anchor="middle" fill="#cdd3e1" font-size="11">ToolDispatcher</text>
+        <text x="470" y="226" text-anchor="middle" fill="#8b93a7" font-size="10">SimulatorManager · WDAManager</text>
+
+        <!-- Two arrows out -->
+        <line x1="595" y1="160" x2="745" y2="80"  stroke="#5fd6a4" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="595" y1="220" x2="745" y2="300" stroke="#ffb86b" stroke-width="1.5" marker-end="url(#arr)"/>
+        <text x="650" y="105" fill="#5fd6a4" font-size="11">Process()</text>
+        <text x="650" y="290" fill="#ffb86b" font-size="11">URLSession HTTP</text>
+
+        <!-- simctl -->
+        <rect x="745" y="40" width="180" height="80" rx="12" fill="#161a25" stroke="#5fd6a4"/>
+        <text x="835" y="72" text-anchor="middle" fill="#5fd6a4" font-size="15" font-weight="700">xcrun simctl</text>
+        <text x="835" y="95" text-anchor="middle" fill="#8b93a7" font-size="11">boot · screenshot · install</text>
+
+        <!-- WDA -->
+        <rect x="745" y="265" width="180" height="80" rx="12" fill="#161a25" stroke="#ffb86b"/>
+        <text x="835" y="297" text-anchor="middle" fill="#ffb86b" font-size="15" font-weight="700">WebDriverAgent</text>
+        <text x="835" y="320" text-anchor="middle" fill="#8b93a7" font-size="11">:8100 · XCTest API</text>
+
+        <!-- Sim -->
+        <rect x="965" y="140" width="115" height="100" rx="14" fill="#161a25" stroke="#232838"/>
+        <text x="1022" y="180" text-anchor="middle" fill="#e7ebf3" font-size="14" font-weight="700">iOS</text>
+        <text x="1022" y="200" text-anchor="middle" fill="#e7ebf3" font-size="14" font-weight="700">Simulator</text>
+        <text x="1022" y="222" text-anchor="middle" fill="#8b93a7" font-size="11">/ device</text>
+
+        <!-- arrows to sim -->
+        <line x1="925" y1="80" x2="990" y2="155" stroke="#5fd6a4" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="925" y1="305" x2="990" y2="225" stroke="#ffb86b" stroke-width="1.5" marker-end="url(#arr)"/>
+      </svg>
+    </div>
+
+    <div class="grid grid-2" style="margin-top: 24px;">
+      <div class="card">
+        <span class="tag green">simctl path</span>
+        <p style="margin:0">Anything Apple ships with Xcode: boot, screenshot, install IPA, GPS, video record. Fast. Sim-only or via xcdevice.</p>
+      </div>
+      <div class="card">
+        <span class="tag orange">WDA path</span>
+        <p style="margin:0">Anything that requires touching pixels: tap, swipe, type, hardware buttons, UI tree. Real device too. Slower to start (~30 s).</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. PROTOCOL ANATOMY -->
+  <section class="slide">
+    <h3>SLIDE 3 · Protocol anatomy</h3>
+    <h2>Three things an MCP server exposes</h2>
+
+    <div class="grid grid-3" style="margin-top: 24px;">
+      <div class="card">
+        <span class="tag">1. Tools</span>
+        <h4>Things the model can <em>do</em></h4>
+        <p class="muted">Side-effecting actions: <code>tap</code>, <code>screenshot</code>, <code>boot_simulator</code>. Each has a JSON Schema for inputs.</p>
+        <p style="font-size:12px; color: var(--accent); margin-top:10px;">← Our MCP ships 27 of these.</p>
+      </div>
+      <div class="card">
+        <span class="tag purple">2. Resources</span>
+        <h4>Things the model can <em>read</em></h4>
+        <p class="muted">Read-only data identified by URI: log files, project source, config. Not used by our MCP yet — could expose sim system logs as a resource later.</p>
+      </div>
+      <div class="card">
+        <span class="tag green">3. Prompts</span>
+        <h4>Reusable templates</h4>
+        <p class="muted">Pre-built prompts the user can pick from a menu. e.g. "QA my app: launch, take screenshots of every tab." Also not used yet.</p>
+      </div>
+    </div>
+
+    <div style="margin-top: 28px;">
+      <h3 style="margin-bottom:12px">The lifecycle</h3>
+      <div class="seq">
+        <div class="step"><div><strong>initialize</strong> — client and server handshake on protocol version &amp; capabilities</div></div>
+        <div class="step"><div><strong>tools/list</strong> — server returns the 27 <code>Tool</code> objects with name, description, inputSchema</div></div>
+        <div class="step"><div>Model decides to call a tool. Client sends <strong>tools/call</strong> with name + args</div></div>
+        <div class="step"><div>Server runs the handler, returns <strong>CallTool.Result</strong> with content blocks (text, image, etc.)</div></div>
+        <div class="step"><div>Client feeds the result back into the model's context. Loop continues.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. WIRE FORMAT -->
+  <section class="slide">
+    <h3>SLIDE 4 · The wire format</h3>
+    <h2>What actually flows over stdin/stdout</h2>
+    <p class="muted">Every message is a JSON-RPC envelope. Newline-delimited. stderr is reserved for logs (which is why our <code>log()</code> helper writes there).</p>
+
+    <div class="split" style="margin-top: 20px;">
+      <div>
+        <h3 style="font-size:14px; color: var(--accent);">Client → server: tools/call</h3>
+<pre><span class="tok-key">{</span>
+  <span class="tok-str">"jsonrpc"</span>: <span class="tok-str">"2.0"</span>,
+  <span class="tok-str">"id"</span>: <span class="tok-num">42</span>,
+  <span class="tok-str">"method"</span>: <span class="tok-str">"tools/call"</span>,
+  <span class="tok-str">"params"</span>: {
+    <span class="tok-str">"name"</span>: <span class="tok-str">"tap"</span>,
+    <span class="tok-str">"arguments"</span>: {
+      <span class="tok-str">"x"</span>: <span class="tok-num">196</span>,
+      <span class="tok-str">"y"</span>: <span class="tok-num">412</span>
+    }
+  }
+<span class="tok-key">}</span></pre>
+      </div>
+      <div>
+        <h3 style="font-size:14px; color: var(--accent-2);">Server → client: result</h3>
+<pre><span class="tok-key">{</span>
+  <span class="tok-str">"jsonrpc"</span>: <span class="tok-str">"2.0"</span>,
+  <span class="tok-str">"id"</span>: <span class="tok-num">42</span>,
+  <span class="tok-str">"result"</span>: {
+    <span class="tok-str">"content"</span>: [
+      {
+        <span class="tok-str">"type"</span>: <span class="tok-str">"text"</span>,
+        <span class="tok-str">"text"</span>: <span class="tok-str">"Tapped at (196, 412)"</span>
+      }
+    ],
+    <span class="tok-str">"isError"</span>: <span class="tok-num">false</span>
+  }
+<span class="tok-key">}</span></pre>
+      </div>
+    </div>
+
+    <div class="callout" style="margin-top:24px">
+      The Swift MCP SDK hides the JSON-RPC plumbing. We register handlers and return strongly-typed
+      <code>CallTool.Result</code> values; the SDK serializes them.
+    </div>
+  </section>
+
+  <!-- 6. TOOL DEFINITION -->
+  <section class="slide">
+    <h3>SLIDE 5 · How we describe a tool to the model</h3>
+    <h2>The schema is the contract</h2>
+    <p class="lead">
+      The <code>inputSchema</code> is the only thing the model sees when it decides whether and how to call a tool.
+      Bad schema = bad calls. Each of our 27 tools has one.
+    </p>
+
+<pre style="margin-top:20px"><span class="tok-typ">Tool</span>(
+    name: <span class="tok-str">"tap"</span>,
+    description: <span class="tok-str">"Tap at x,y coordinates on the iOS Simulator screen."</span>,
+    inputSchema: .<span class="tok-fn">object</span>([
+        <span class="tok-str">"type"</span>: .<span class="tok-fn">string</span>(<span class="tok-str">"object"</span>),
+        <span class="tok-str">"properties"</span>: .<span class="tok-fn">object</span>([
+            <span class="tok-str">"x"</span>: .<span class="tok-fn">object</span>([<span class="tok-str">"type"</span>: .<span class="tok-fn">string</span>(<span class="tok-str">"number"</span>),
+                              <span class="tok-str">"description"</span>: .<span class="tok-fn">string</span>(<span class="tok-str">"X coordinate in points"</span>)]),
+            <span class="tok-str">"y"</span>: .<span class="tok-fn">object</span>([<span class="tok-str">"type"</span>: .<span class="tok-fn">string</span>(<span class="tok-str">"number"</span>),
+                              <span class="tok-str">"description"</span>: .<span class="tok-fn">string</span>(<span class="tok-str">"Y coordinate in points"</span>)]),
+            <span class="tok-str">"udid"</span>: .<span class="tok-fn">object</span>([<span class="tok-str">"type"</span>: .<span class="tok-fn">string</span>(<span class="tok-str">"string"</span>),
+                                 <span class="tok-str">"description"</span>: .<span class="tok-fn">string</span>(<span class="tok-str">"Simulator UDID (optional)"</span>)]),
+        ]),
+        <span class="tok-str">"required"</span>: .<span class="tok-fn">array</span>([.<span class="tok-fn">string</span>(<span class="tok-str">"x"</span>), .<span class="tok-fn">string</span>(<span class="tok-str">"y"</span>)]),
+    ])
+)</pre>
+
+    <div class="callout" style="margin-top:24px">
+      <strong>Lesson learned:</strong> describe <em>units</em> ("in points"), <em>defaults</em> ("uses booted sim if omitted"),
+      and <em>enums</em> (e.g. button names: home/lock/siri). Vague schemas make Claude guess.
+    </div>
+  </section>
+
+  <!-- 7. SIMCTL DEEP DIVE -->
+  <section class="slide">
+    <h3>SLIDE 6 · How a screenshot actually happens</h3>
+    <h2>The simctl path, end-to-end</h2>
+
+    <div class="seq" style="margin-top:16px">
+      <div class="step"><div>Claude calls <code>screenshot</code> with optional <code>output_path</code>.</div></div>
+      <div class="step"><div><code>ToolDispatcher.dispatch</code> routes to <code>SimctlTools.screenshot()</code>.</div></div>
+      <div class="step"><div>Handler asks <code>SimulatorManager</code> for the booted UDID — cached after first lookup.</div></div>
+      <div class="step"><div>Spawn <code>/usr/bin/xcrun simctl io &lt;udid&gt; screenshot --type png /tmp/shot.png</code> via async <code>Process</code>.</div></div>
+      <div class="step"><div>Read PNG bytes from disk.</div></div>
+      <div class="step"><div>Return <code>CallTool.Result(content: [.image(data:, mimeType: "image/png")])</code>.</div></div>
+      <div class="step"><div>Claude receives the image inline and can <em>see</em> it in the next turn.</div></div>
+    </div>
+
+    <p class="muted" style="margin-top:20px">
+      No private APIs. No accessibility hacks. Just a CLI Apple ships with Xcode, wrapped in
+      a <code>Process</code> with stdout/stderr piped, awaited from Swift concurrency, and re-emitted as MCP content.
+    </p>
+  </section>
+
+  <!-- 8. WDA DEEP DIVE -->
+  <section class="slide">
+    <h3>SLIDE 7 · How a tap actually happens</h3>
+    <h2>The WDA path, end-to-end</h2>
+
+    <div class="split" style="margin-top:16px">
+      <div>
+        <div class="seq">
+          <div class="step"><div>User: "tap the Sign In button at 196, 412"</div></div>
+          <div class="step"><div><code>WDATools.tap()</code> calls <code>WDAManager.tap(x:y:)</code>.</div></div>
+          <div class="step"><div>Manager lazily creates a WDA session on <code>http://localhost:8100/session</code> if needed.</div></div>
+          <div class="step"><div>POSTs a W3C-style action to <code>/session/&lt;id&gt;/actions</code>:</div></div>
+          <div class="step"><div>WebDriverAgent (running inside the sim as an XCTest) translates that JSON into <code>XCUICoordinate.tap()</code>.</div></div>
+          <div class="step"><div>iOS dispatches a real touch event. UIKit reacts as if a finger pressed the screen.</div></div>
+        </div>
+      </div>
+      <div>
+        <h3 style="font-size:14px; color: var(--orange);">The actions payload we POST</h3>
+<pre>{
+  <span class="tok-str">"actions"</span>: [{
+    <span class="tok-str">"type"</span>: <span class="tok-str">"pointer"</span>,
+    <span class="tok-str">"id"</span>: <span class="tok-str">"finger1"</span>,
+    <span class="tok-str">"parameters"</span>: { <span class="tok-str">"pointerType"</span>: <span class="tok-str">"touch"</span> },
+    <span class="tok-str">"actions"</span>: [
+      { <span class="tok-str">"type"</span>: <span class="tok-str">"pointerMove"</span>,
+        <span class="tok-str">"duration"</span>: <span class="tok-num">0</span>,
+        <span class="tok-str">"x"</span>: <span class="tok-num">196</span>, <span class="tok-str">"y"</span>: <span class="tok-num">412</span> },
+      { <span class="tok-str">"type"</span>: <span class="tok-str">"pointerDown"</span>, <span class="tok-str">"button"</span>: <span class="tok-num">0</span> },
+      { <span class="tok-str">"type"</span>: <span class="tok-str">"pause"</span>,       <span class="tok-str">"duration"</span>: <span class="tok-num">100</span> },
+      { <span class="tok-str">"type"</span>: <span class="tok-str">"pointerUp"</span>,   <span class="tok-str">"button"</span>: <span class="tok-num">0</span> }
+    ]
+  }]
+}</pre>
+        <p class="muted" style="margin-top:12px; font-size:12px">
+          Same W3C WebDriver shape Selenium and Appium use — the standard's been around long enough that
+          we get to inherit it for free.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9. WDA STARTUP -->
+  <section class="slide">
+    <h3>SLIDE 8 · The most magical/scariest piece</h3>
+    <h2>How <code>WDAManager</code> starts WebDriverAgent</h2>
+    <p class="lead">
+      WDA isn't a service we install — it's an <strong>XCTest target</strong> that runs <em>inside</em> the simulator.
+      We launch it with <code>xcodebuild test</code> and watch its log output to know when it's ready.
+    </p>
+
+    <div class="split" style="margin-top:16px">
+      <div>
+<pre><span class="tok-com">// 1. Spawn xcodebuild test in background</span>
+<span class="tok-key">let</span> args = [
+  <span class="tok-str">"test"</span>,
+  <span class="tok-str">"-project"</span>, wdaProjectPath,
+  <span class="tok-str">"-scheme"</span>, <span class="tok-str">"WebDriverAgentRunner"</span>,
+  <span class="tok-str">"-destination"</span>, <span class="tok-str">"id=\(udid)"</span>,
+  <span class="tok-str">"USE_PORT=8100"</span>,
+]
+<span class="tok-key">let</span> proc = <span class="tok-key">try</span> launchBackground(
+  <span class="tok-str">"/usr/bin/xcodebuild"</span>, args) { line <span class="tok-key">in</span>
+    log(<span class="tok-str">"[WDA] \(line)"</span>)
+  }
+
+<span class="tok-com">// 2. Poll /status until ready (timeout 120s)</span>
+<span class="tok-key">while</span> Date() &lt; deadline {
+  <span class="tok-key">if</span> <span class="tok-key">let</span> s = <span class="tok-key">try</span>? <span class="tok-key">await</span> getStatus(),
+     s.ready == <span class="tok-num">true</span> { <span class="tok-key">return</span> }
+  <span class="tok-key">try</span> <span class="tok-key">await</span> Task.sleep(nanoseconds: delay)
+  delay = min(delay * <span class="tok-num">2</span>, <span class="tok-num">8_000_000_000</span>)
+}</pre>
+      </div>
+      <div>
+        <div class="card">
+          <h4 style="margin-bottom:10px">What this gives us</h4>
+          <p class="muted" style="margin:0; font-size:13px">
+            <strong>Public API only.</strong> WDA uses XCTest, which Apple sanctions.
+            No private headers, no jailbreak.
+          </p>
+          <p class="muted" style="font-size:13px; margin-top:10px">
+            <strong>Simulator and device.</strong> Same code path. Real device just needs
+            <code>iproxy 8100 8100</code> for USB port-forward.
+          </p>
+          <p class="muted" style="font-size:13px; margin-top:10px">
+            <strong>Battle-tested.</strong> Appium and Sauce Labs run on top of WDA. We're not
+            inventing UI automation; we're putting an MCP face on it.
+          </p>
+        </div>
+        <div class="card" style="margin-top:12px; border-color: rgba(255,184,107,0.35);">
+          <h4 style="margin-bottom:6px; color: var(--orange)">Cost</h4>
+          <p class="muted" style="margin:0; font-size:13px">
+            ~30s cold-start while xcodebuild compiles and launches the runner. Subsequent calls reuse the same WDA session.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10. TOOL CATALOG -->
+  <section class="slide">
+    <h3>SLIDE 9 · The full surface area</h3>
+    <h2>All 27 tools, two backends</h2>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="all">All (27)</div>
+      <div class="tab" data-tab="simctl">simctl (13)</div>
+      <div class="tab" data-tab="wda">WebDriverAgent (14)</div>
+    </div>
+
+    <input type="text" class="filter" id="toolFilter" placeholder="Filter tools (e.g. 'tap', 'video', 'app')…" />
+
+    <div style="overflow:auto; max-height: 60vh;">
+      <table id="toolTable">
+        <thead>
+          <tr><th>Tool</th><th>Backend</th><th>What it does</th><th>Key args</th></tr>
+        </thead>
+        <tbody>
+          <tr data-backend="simctl"><td><code>list_simulators</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>List every simulator + state</td><td>—</td></tr>
+          <tr data-backend="simctl"><td><code>get_booted_sim_id</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>Return booted sim's UDID</td><td>—</td></tr>
+          <tr data-backend="simctl"><td><code>boot_simulator</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>Boot a simulator by UDID or name</td><td><code>udid</code> | <code>name</code></td></tr>
+          <tr data-backend="simctl"><td><code>open_simulator</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>Bring Simulator.app to the foreground</td><td>—</td></tr>
+          <tr data-backend="simctl"><td><code>get_device_info</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>Detailed info about the booted sim</td><td>—</td></tr>
+          <tr data-backend="simctl"><td><code>screenshot</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>Capture PNG/JPEG, return inline</td><td><code>type</code>, <code>output_path</code></td></tr>
+          <tr data-backend="simctl"><td><code>record_video</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>Start background <code>recordVideo</code></td><td><code>output_path</code>, <code>codec</code></td></tr>
+          <tr data-backend="simctl"><td><code>stop_recording</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>Terminate the recorder process</td><td>—</td></tr>
+          <tr data-backend="simctl"><td><code>set_location</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>Spoof GPS coordinates</td><td><code>lat</code>, <code>lng</code></td></tr>
+          <tr data-backend="simctl"><td><code>clear_location</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>Reset GPS</td><td>—</td></tr>
+          <tr data-backend="simctl"><td><code>install_app</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>Install a <code>.app</code> bundle</td><td><code>app_path</code></td></tr>
+          <tr data-backend="simctl"><td><code>open_url</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>Trigger a URL scheme</td><td><code>url</code></td></tr>
+          <tr data-backend="simctl"><td><code>wait</code></td><td><span class="tag green" style="margin:0">simctl</span></td><td>Sleep N seconds (lets animations settle)</td><td><code>seconds</code></td></tr>
+
+          <tr data-backend="wda"><td><code>start_wda</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>Spawn xcodebuild test, wait for /status ready</td><td><code>wda_project_path</code></td></tr>
+          <tr data-backend="wda"><td><code>stop_wda</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>Terminate xcodebuild process</td><td>—</td></tr>
+          <tr data-backend="wda"><td><code>tap</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>Single tap at point</td><td><code>x</code>, <code>y</code></td></tr>
+          <tr data-backend="wda"><td><code>long_press</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>Hold-and-release at point</td><td><code>x</code>, <code>y</code>, <code>duration</code></td></tr>
+          <tr data-backend="wda"><td><code>swipe</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>Drag from one point to another</td><td><code>fromX/Y</code>, <code>toX/Y</code></td></tr>
+          <tr data-backend="wda"><td><code>type_text</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>Send keys to the focused field</td><td><code>text</code></td></tr>
+          <tr data-backend="wda"><td><code>tap_and_type</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>Tap a field then type</td><td><code>x</code>, <code>y</code>, <code>text</code></td></tr>
+          <tr data-backend="wda"><td><code>press_button</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>home / lock / volumeup / volumedown / siri</td><td><code>name</code></td></tr>
+          <tr data-backend="wda"><td><code>shake</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>Trigger Shake gesture</td><td>—</td></tr>
+          <tr data-backend="wda"><td><code>ui_describe_all</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>Dump the whole UI tree as XML</td><td>—</td></tr>
+          <tr data-backend="wda"><td><code>ui_describe_point</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>Describe element at a point</td><td><code>x</code>, <code>y</code></td></tr>
+          <tr data-backend="wda"><td><code>launch_app</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>Activate by bundle ID</td><td><code>bundle_id</code></td></tr>
+          <tr data-backend="wda"><td><code>terminate_app</code></td><td><span class="tag orange" style="margin:0">WDA</span></td><td>Kill app by bundle ID</td><td><code>bundle_id</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 11. SWIFT MAP -->
+  <section class="slide">
+    <h3>SLIDE 10 · The Swift implementation map</h3>
+    <h2>One file per concern</h2>
+
+    <table style="margin-top:16px">
+      <thead><tr><th>File</th><th>Type</th><th>Job</th></tr></thead>
+      <tbody>
+        <tr><td><code>main.swift</code></td><td>entry</td><td>Construct managers + dispatcher, register MCP handlers, start stdio transport.</td></tr>
+        <tr><td><code>Shell.swift</code></td><td>util</td><td>Async wrappers around <code>Foundation.Process</code>: <code>shell()</code>, <code>launchBackground()</code>, <code>log()</code>.</td></tr>
+        <tr><td><code>Models/SimctlModels.swift</code></td><td>model</td><td>Codable types for <code>simctl list devices --json</code>.</td></tr>
+        <tr><td><code>Models/WDAModels.swift</code></td><td>model</td><td>Codable types for WDA: actions, keys, sessions, button presses.</td></tr>
+        <tr><td><code>Managers/SimulatorManager.swift</code></td><td><strong>actor</strong></td><td>Caches booted UDID; owns the video-recording <code>Process</code>.</td></tr>
+        <tr><td><code>Managers/WDAManager.swift</code></td><td><strong>actor</strong></td><td>Spawns xcodebuild test, polls /status, owns WDA session, sends HTTP.</td></tr>
+        <tr><td><code>Tools/ToolDefinitions.swift</code></td><td>schema</td><td>The 27 <code>Tool</code> objects with name + description + inputSchema.</td></tr>
+        <tr><td><code>Tools/ToolDispatcher.swift</code></td><td>router</td><td>Big switch on tool name → handler. Catches errors, returns isError.</td></tr>
+        <tr><td><code>Tools/SimctlTools.swift</code></td><td>handlers</td><td>Implements simctl-backed tools.</td></tr>
+        <tr><td><code>Tools/WDATools.swift</code></td><td>handlers</td><td>Implements WDA-backed tools.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="grid grid-2" style="margin-top:24px">
+      <div class="card">
+        <span class="tag">Concurrency</span>
+        <h4>Why <code>actor</code>, not class</h4>
+        <p class="muted" style="margin:0">Swift 6 strict concurrency. The cached UDID and the recording Process are mutable shared state. Actors give us isolation for free; no manual locks.</p>
+      </div>
+      <div class="card">
+        <span class="tag purple">stdout discipline</span>
+        <h4>Logs go to stderr</h4>
+        <p class="muted" style="margin:0"><code>log()</code> writes to <code>FileHandle.standardError</code> because stdout is the protocol channel. A stray <code>print()</code> would corrupt the JSON-RPC stream.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12. DEMO PROMPTS -->
+  <section class="slide">
+    <h3>SLIDE 11 · Live demo</h3>
+    <h2>Click any prompt to copy. Paste it into Claude Code with the MCP installed.</h2>
+
+    <div class="grid grid-2" style="margin-top:16px">
+      <div class="prompt-card" onclick="copyPrompt(this)">
+        <div class="copy">📋 click to copy</div>
+        <div class="quote">"Boot the iPhone 16 Pro simulator, then take a screenshot and tell me what app is in the foreground."</div>
+        <div class="why">Exercises: <code>boot_simulator</code> → <code>open_simulator</code> → <code>screenshot</code> → vision reasoning.</div>
+      </div>
+      <div class="prompt-card" onclick="copyPrompt(this)">
+        <div class="copy">📋 click to copy</div>
+        <div class="quote">"Start WDA pointing at <code>~/WebDriverAgent/WebDriverAgent.xcodeproj</code>, then dump the UI tree of the home screen."</div>
+        <div class="why">Exercises: <code>start_wda</code> (~30 s cold start) → <code>ui_describe_all</code>.</div>
+      </div>
+      <div class="prompt-card" onclick="copyPrompt(this)">
+        <div class="copy">📋 click to copy</div>
+        <div class="quote">"Open Maps, search for 'Anthropic SF', take a screenshot, then drop a pin and screenshot again."</div>
+        <div class="why">Exercises: <code>launch_app</code> → <code>tap_and_type</code> → <code>screenshot</code> → <code>long_press</code>.</div>
+      </div>
+      <div class="prompt-card" onclick="copyPrompt(this)">
+        <div class="copy">📋 click to copy</div>
+        <div class="quote">"Set location to Tokyo (35.6762, 139.6503), open Maps, and screenshot what shows."</div>
+        <div class="why">Exercises: <code>set_location</code> → <code>launch_app</code> → <code>screenshot</code>.</div>
+      </div>
+      <div class="prompt-card" onclick="copyPrompt(this)">
+        <div class="copy">📋 click to copy</div>
+        <div class="quote">"Record a 10-second video of me typing 'hello world' into the Notes app, save it to ~/Desktop/demo.mp4."</div>
+        <div class="why">Exercises: <code>record_video</code> → <code>launch_app</code> → <code>tap_and_type</code> → <code>stop_recording</code>.</div>
+      </div>
+      <div class="prompt-card" onclick="copyPrompt(this)">
+        <div class="copy">📋 click to copy</div>
+        <div class="quote">"Install <code>~/Build/MyApp.app</code>, launch it, and tap through the onboarding screens until you hit the home tab. Screenshot each step."</div>
+        <div class="why">Closing demo: shows Claude as an autonomous QA agent — multi-step, vision-driven.</div>
+      </div>
+    </div>
+
+    <p class="muted" style="margin-top:24px; font-size:13px">
+      Pro tip: the first prompt of a session triggers <code>tools/list</code> — Claude reads the descriptions and decides which to use.
+      That's why the schema text matters more than the implementation.
+    </p>
+  </section>
+
+  <!-- 13. Q&A -->
+  <section class="slide">
+    <h3>SLIDE 12 · Anticipated questions</h3>
+    <h2>Q&amp;A prep</h2>
+
+    <details>
+      <summary>Why Swift instead of TypeScript or Python like most MCP servers?</summary>
+      <p>Three reasons. (1) We're already in the Apple ecosystem — <code>xcrun</code>, <code>xcodebuild</code>, and Foundation are first-class. (2) <code>Process</code> + actors give us robust concurrency without a runtime. (3) A native binary ships as a single executable; no <code>node_modules</code>, no venv.</p>
+    </details>
+
+    <details>
+      <summary>Why not just call WDA directly from Claude using HTTP?</summary>
+      <p>Claude can't speak HTTP to arbitrary localhost services from a chat. MCP is the bridge. Also, the MCP wraps WDA <em>and</em> simctl behind one consistent tool surface, with retry/session/cache logic the model shouldn't have to manage.</p>
+    </details>
+
+    <details>
+      <summary>What happens if WDA crashes mid-session?</summary>
+      <p><code>WDAManager.session()</code> validates the cached <code>sessionId</code> with a <code>/status</code> ping. If it 404s, we drop it and create a new one on the next call. If <code>xcodebuild</code> exits, the next tool call will fail with a clear "WDA is not running" error — the model can re-run <code>start_wda</code>.</p>
+    </details>
+
+    <details>
+      <summary>Real device support?</summary>
+      <p>Same code path. WDA is built for the device target instead of the sim. The user runs <code>iproxy 8100 8100</code> from <code>libimobiledevice</code> to forward USB to localhost, and <code>start_wda</code> sees it on port 8100 just like a sim.</p>
+    </details>
+
+    <details>
+      <summary>Security — is Claude tapping arbitrary points scary?</summary>
+      <p>Yes, and that's by design. The MCP runs locally as the user, so it has the same scope the user has. The host (Claude Code, Cowork) gates each tool call with user approval the first time. We don't expose anything Claude couldn't get by SSHing into the same machine.</p>
+    </details>
+
+    <details>
+      <summary>Performance? How fast is a tap?</summary>
+      <p>simctl tools: ~50–200ms (one fork/exec). WDA tools after warm-up: ~100–300ms per HTTP round-trip. The expensive thing is <code>start_wda</code> at ~30s cold (xcodebuild compiles WebDriverAgentRunner). We do it once per session.</p>
+    </details>
+
+    <details>
+      <summary>Why not use <code>idb</code> like the Facebook MCP?</summary>
+      <p><code>idb</code> requires a Python companion process, an Objective-C bridge, and pulls in <code>fb-idb</code> daemons. It also relies on private frameworks for some operations. WDA is sanctioned (XCTest is a public Apple framework), already maintained by Appium, and works for sim + real device. Cleaner trade.</p>
+    </details>
+
+    <details>
+      <summary>Could we add new tools easily?</summary>
+      <p>Yes — add a <code>Tool</code> entry in <code>ToolDefinitions.swift</code>, a case in <code>ToolDispatcher</code>, and a handler in <code>SimctlTools</code> or <code>WDATools</code>. ~20 lines per tool. Good candidates: biometric simulation (<code>simctl ui</code>), accessibility settings, push-notification injection (<code>simctl push</code>).</p>
+    </details>
+
+    <details>
+      <summary>Does Claude "see" the screen?</summary>
+      <p>Only when we call <code>screenshot</code>. The image is returned as MCP <code>image</code> content and lands in the model's next turn as visual context. <code>ui_describe_all</code> is the cheaper text alternative — XML accessibility tree, no vision tokens.</p>
+    </details>
+  </section>
+
+  <!-- 14. END -->
+  <section class="slide title-slide">
+    <p class="muted" style="letter-spacing: 0.2em; text-transform: uppercase; font-size: 12px;">Slide 13 · Wrap</p>
+    <h1>That's it.<br/><span class="gradient">JSON over a pipe → real iOS automation.</span></h1>
+    <p class="lead" style="margin-top: 24px;">
+      MCP gives us a standard envelope. We fill it with two well-known backends. The model gets a clean tool surface.
+      The user gets Claude that can actually drive their phone.
+    </p>
+    <div style="margin-top: 36px; display: flex; gap: 12px;">
+      <button class="btn" onclick="goto(0)">↺ Restart</button>
+      <button class="btn" onclick="goto(11)">→ Demo prompts</button>
+      <button class="btn" onclick="goto(12)">→ Q&amp;A</button>
+    </div>
+  </section>
+
+</div>
+
+<div class="nav">
+  <button class="btn" id="prev" onclick="prev()">← Prev</button>
+  <div class="progress"><div id="bar" style="width: 7.7%"></div></div>
+  <button class="btn" id="next" onclick="next()">Next →</button>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const total = slides.length;
+  let idx = 0;
+  document.getElementById('tot').textContent = total;
+
+  function goto(i) {
+    idx = Math.max(0, Math.min(total - 1, i));
+    slides.forEach((s, k) => s.classList.toggle('active', k === idx));
+    document.getElementById('cur').textContent = idx + 1;
+    document.getElementById('bar').style.width = ((idx + 1) / total * 100) + '%';
+    document.getElementById('prev').disabled = idx === 0;
+    document.getElementById('next').disabled = idx === total - 1;
+  }
+  function next() { goto(idx + 1); }
+  function prev() { goto(idx - 1); }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); next(); }
+    if (e.key === 'ArrowLeft'  || e.key === 'PageUp')   { e.preventDefault(); prev(); }
+    if (e.key === 'Home') { goto(0); }
+    if (e.key === 'End')  { goto(total - 1); }
+    if (e.key.toLowerCase() === 'f') {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    }
+  });
+
+  // Tool table tabs + filter
+  const tabs = document.querySelectorAll('.tab');
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    const which = t.dataset.tab;
+    document.querySelectorAll('#toolTable tbody tr').forEach(row => {
+      row.style.display = (which === 'all' || row.dataset.backend === which) ? '' : 'none';
+    });
+  }));
+
+  const filter = document.getElementById('toolFilter');
+  if (filter) {
+    filter.addEventListener('input', () => {
+      const q = filter.value.toLowerCase();
+      document.querySelectorAll('#toolTable tbody tr').forEach(row => {
+        row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+      });
+    });
+  }
+
+  // Copy prompt
+  function copyPrompt(card) {
+    const text = card.querySelector('.quote').textContent.replace(/^"|"$/g, '');
+    navigator.clipboard.writeText(text).then(() => {
+      card.classList.add('copied');
+      const copy = card.querySelector('.copy');
+      const orig = copy.textContent;
+      copy.textContent = '✓ copied!';
+      setTimeout(() => { copy.textContent = orig; card.classList.remove('copied'); }, 1500);
+    });
+  }
+  window.copyPrompt = copyPrompt;
+
+  goto(0);
+</script>
+
+</body>
+</html>

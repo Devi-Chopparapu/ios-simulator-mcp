@@ -149,22 +149,58 @@ func screenshot(_ args: [String: Value]?, manager: SimulatorManager) async throw
         udid = try await manager.bootedUDID()
     }
 
-    let format = args?["type"]?.stringValue ?? "png"
+    let format   = args?["type"]?.stringValue     ?? "png"
+    // scale=0.5 on a 3× Retina device (~9× fewer vision tokens vs native, still sharp).
+    // Pass scale=1.0 for full native resolution.
+    let scale    = args?["scale"]?.numericDoubleValue ?? 0.5
     let mimeType = format == "jpeg" ? "image/jpeg" : "image/png"
-    let ext = format == "jpeg" ? "jpg" : "png"
-    let outputPath = NSTemporaryDirectory() + "simulator_screenshot_\(UUID().uuidString).\(ext)"
+    let ext      = format == "jpeg" ? "jpg" : "png"
+    let uuid     = UUID().uuidString
+    let fullPath = NSTemporaryDirectory() + "sim_shot_\(uuid).\(ext)"
 
-    _ = try await shell("/usr/bin/xcrun", ["simctl", "io", udid, "screenshot", "--type", format, outputPath])
+    _ = try await shell("/usr/bin/xcrun", ["simctl", "io", udid, "screenshot", "--type", format, fullPath])
+    defer { try? FileManager.default.removeItem(atPath: fullPath) }
 
-    defer { try? FileManager.default.removeItem(atPath: outputPath) }
-    guard let imageData = FileManager.default.contents(atPath: outputPath) else {
-        return .text("Screenshot taken but could not read file at \(outputPath)")
+    guard let fullData = FileManager.default.contents(atPath: fullPath) else {
+        return .text("Screenshot taken but could not read file at \(fullPath)")
+    }
+
+    // Downscale via sips (built-in macOS) when scale < 1.0.
+    // This dramatically reduces vision token cost: a 3× Retina screenshot at scale=0.5
+    // is ~589×1278 px instead of 1179×2556 — roughly 4× fewer tokens.
+    // On failure we fall through to the full-res image rather than erroring.
+    var imageData = fullData
+    if scale > 0 && scale < 1.0 {
+        if let scaledData = await downscaleImage(at: fullPath, scale: scale, ext: ext) {
+            imageData = scaledData
+        }
     }
 
     return CallTool.Result(
         content: [.image(data: imageData.base64EncodedString(), mimeType: mimeType, annotations: nil, _meta: nil)],
         isError: false
     )
+}
+
+/// Uses `sips` (macOS built-in) to resample an image file by a scale factor.
+/// Returns nil if anything goes wrong — callers fall back to the original.
+private func downscaleImage(at path: String, scale: Double, ext: String) async -> Data? {
+    // Query pixel width (sips -g outputs lines like "  pixelWidth: 1179")
+    guard let info = try? await shell("/usr/bin/sips", ["-g", "pixelWidth", path]),
+          let widthLine = info.split(separator: "\n").first(where: { $0.contains("pixelWidth") }),
+          let widthStr  = widthLine.split(separator: ":").last.map(String.init),
+          let pixelWidth = Int(widthStr.trimmingCharacters(in: .whitespaces)),
+          pixelWidth > 0 else { return nil }
+
+    let scaledWidth = max(1, Int(Double(pixelWidth) * scale))
+    let scaledPath  = path + "_scaled.\(ext)"
+    defer { try? FileManager.default.removeItem(atPath: scaledPath) }
+
+    guard (try? await shell("/usr/bin/sips",
+                            ["--resampleWidth", "\(scaledWidth)", path, "--out", scaledPath])) != nil
+    else { return nil }
+
+    return FileManager.default.contents(atPath: scaledPath)
 }
 
 // MARK: - record_video

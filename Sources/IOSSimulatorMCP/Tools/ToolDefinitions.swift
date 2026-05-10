@@ -53,12 +53,13 @@ enum ToolDefinitions {
         ),
         Tool(
             name: "screenshot",
-            description: "Take a screenshot of the iOS simulator screen and return the image.",
+            description: "Take a screenshot of the iOS simulator screen and return the image. Downscaled by default (scale=0.5) to reduce vision token cost — pass scale=1.0 for native resolution.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "udid": .object(["type": .string("string"), "description": .string("Simulator UDID (optional, uses booted sim)")]),
-                    "type": .object(["type": .string("string"), "description": .string("Image format: 'png' (default) or 'jpeg'")]),
+                    "udid":  .object(["type": .string("string"), "description": .string("Simulator UDID (optional, uses booted sim)")]),
+                    "type":  .object(["type": .string("string"), "description": .string("Image format: 'png' (default) or 'jpeg'")]),
+                    "scale": .object(["type": .string("number"), "description": .string("Downsample factor 0–1 (default 0.5). 0.5 on a 3× Retina device ≈ 1.5× logical points, ~4× fewer tokens. Use 1.0 for native resolution.")]),
                 ]),
             ])
         ),
@@ -250,10 +251,12 @@ enum ToolDefinitions {
         ),
         Tool(
             name: "ui_describe_all",
-            description: "Get the full UI accessibility tree of the current screen as XML.",
+            description: "Get the UI elements on the current screen. Returns a compact text list by default (~90% fewer tokens than raw XML). Pass raw=true to get the full WDA XML for debugging.",
             inputSchema: .object([
                 "type": .string("object"),
-                "properties": .object([:]),
+                "properties": .object([
+                    "raw": .object(["type": .string("boolean"), "description": .string("Return full WDA XML instead of the compact list (default false)")]),
+                ]),
             ])
         ),
         Tool(
