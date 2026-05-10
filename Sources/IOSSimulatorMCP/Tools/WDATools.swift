@@ -29,7 +29,7 @@ func startWDA(_ args: [String: Value]?, simManager: SimulatorManager, wdaManager
         udid = try await simManager.bootedUDID()
     }
 
-    let port = args?["port"]?.doubleValue.map { Int($0) } ?? args?["port"]?.intValue ?? 8100
+    let port = args?["port"]?.numericDoubleValue.map(Int.init) ?? 8100
 
     try await wdaManager.start(udid: udid, wdaProjectPath: wdaPath, port: port)
     try await wdaManager.waitForReady()
@@ -46,7 +46,7 @@ func startWDA(_ args: [String: Value]?, simManager: SimulatorManager, wdaManager
 // MARK: - stop_wda
 
 func stopWDA(_ args: [String: Value]?, wdaManager: WDAManager) async throws -> CallTool.Result {
-    await wdaManager.stop()
+    await wdaManager.stop()  // now async — waits for xcodebuild to fully exit
     return .text("WDA stopped.")
 }
 
@@ -187,6 +187,29 @@ func uiDescribePoint(_ args: [String: Value]?, wdaManager: WDAManager) async thr
         return .text("Error: 'x' and 'y' are required.")
     }
     let result = try await wdaManager.describeElement(x: x, y: y)
+    return .text(result)
+}
+
+// MARK: - tap_element
+
+/// Find the first visible element whose name/label/value contains the query and tap its centre.
+/// Much more reliable than screenshot → estimate coordinates → tap.
+func tapElement(_ args: [String: Value]?, wdaManager: WDAManager) async throws -> CallTool.Result {
+    guard let query = args?["query"]?.stringValue, !query.isEmpty else {
+        return .text("Error: 'query' is required.")
+    }
+    let result = try await wdaManager.tapElement(matching: query)
+    return .text(result)
+}
+
+// MARK: - find_element
+
+/// Find visible elements matching a query — returns their coordinates without tapping.
+func findElement(_ args: [String: Value]?, wdaManager: WDAManager) async throws -> CallTool.Result {
+    guard let query = args?["query"]?.stringValue, !query.isEmpty else {
+        return .text("Error: 'query' is required.")
+    }
+    let result = try await wdaManager.findElement(matching: query)
     return .text(result)
 }
 

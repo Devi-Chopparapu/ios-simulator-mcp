@@ -15,8 +15,24 @@ struct ToolDispatcher: Sendable {
         }
     }
 
+    /// Tools that require WDA. WDA is auto-started if not already running — the user
+    /// never needs to call start_wda explicitly.
+    /// NOTE: press_button(lock/siri) and shake use AppleScript, NOT WDA — keep them out of
+    /// this set so we don't trigger a 2-minute WDA build for those operations.
+    private static let wdaInteractionTools: Set<String> = [
+        "tap", "tap_element", "find_element", "long_press", "swipe",
+        "type_text", "tap_and_type",
+        "ui_describe_all", "ui_describe_point",
+    ]
+
     private func route(_ params: CallTool.Parameters) async throws -> CallTool.Result {
         let args = params.arguments
+
+        // Auto-start WDA transparently before any UI interaction tool.
+        if Self.wdaInteractionTools.contains(params.name) {
+            try await wdaManager.ensureRunning(simManager: simulatorManager)
+        }
+
         switch params.name {
         // --- simctl ---
         case "list_simulators":   return try await listSimulators(args)
@@ -29,12 +45,15 @@ struct ToolDispatcher: Sendable {
         case "stop_recording":    return try await stopRecording(args, manager: simulatorManager)
         case "set_location":      return try await setLocation(args, manager: simulatorManager)
         case "clear_location":    return try await clearLocation(args, manager: simulatorManager)
+        case "find_app":          return try await findApp(args, manager: simulatorManager)
         case "install_app":       return try await installApp(args, manager: simulatorManager)
         case "open_url":          return try await openURL(args, manager: simulatorManager)
         case "wait":              return try await wait(args)
         // --- WDA ---
         case "start_wda":         return try await startWDA(args, simManager: simulatorManager, wdaManager: wdaManager)
         case "stop_wda":          return try await stopWDA(args, wdaManager: wdaManager)
+        case "tap_element":       return try await tapElement(args, wdaManager: wdaManager)
+        case "find_element":      return try await findElement(args, wdaManager: wdaManager)
         case "tap":               return try await tap(args, wdaManager: wdaManager)
         case "long_press":        return try await longPress(args, wdaManager: wdaManager)
         case "swipe":             return try await swipe(args, wdaManager: wdaManager)

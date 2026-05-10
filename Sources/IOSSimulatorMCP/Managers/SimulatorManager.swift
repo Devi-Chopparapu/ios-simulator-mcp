@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 enum SimulatorError: Error, LocalizedError {
     case noBootedSimulator
@@ -37,13 +38,19 @@ actor SimulatorManager {
     private var recordingProcess: Process?
     private var recordingOutputPath: String?
 
-    func startRecording(udid: String, outputPath: String, codec: String) throws {
+    func startRecording(udid: String, outputPath: String, codec: String) async throws {
         // Check isRunning so a crashed/externally-killed process doesn't block a new recording
         if let existing = recordingProcess, existing.isRunning {
             throw SimulatorError.alreadyRecording
         }
         recordingProcess = nil  // clean up any stale reference
 
+        // Kill any simctl recordVideo processes left over from a previous MCP session.
+        // On restart the actor state is fresh but OS-level processes are not.
+        try await killStaleRecordingProcesses(udid: udid)
+
+        // simctl infers the container format from the output file extension (.mov, .mp4, .fmp4).
+        // --type is only valid for `simctl io screenshot`, not recordVideo.
         let process = try launchBackground(
             "/usr/bin/xcrun",
             ["simctl", "io", udid, "recordVideo", "--codec", codec, "--force", outputPath]
@@ -54,12 +61,12 @@ actor SimulatorManager {
         recordingOutputPath = outputPath
     }
 
-    /// Stops recording. Offloads waitUntilExit to a background thread to avoid blocking
-    /// the cooperative thread pool inside this actor method.
+    /// Stops recording. Sends SIGINT (not SIGTERM) so simctl can finalize/flush the video file,
+    /// then offloads waitUntilExit to a background thread to avoid blocking the cooperative thread pool.
     func stopRecording() async throws -> String {
         guard let process = recordingProcess else { throw SimulatorError.notRecording }
         let path = recordingOutputPath ?? "unknown"
-        process.terminate()
+        kill(process.processIdentifier, SIGINT)
         let proc = process
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             DispatchQueue.global().async { proc.waitUntilExit(); cont.resume() }
@@ -72,6 +79,19 @@ actor SimulatorManager {
     var isRecording: Bool { recordingProcess?.isRunning == true }
 
     // MARK: - Private helpers
+
+    /// Sends SIGINT to any OS-level simctl recordVideo processes for this UDID.
+    /// Necessary after MCP restarts, where actor state is fresh but processes linger.
+    private func killStaleRecordingProcesses(udid: String) async throws {
+        let output = (try? await shell("/usr/bin/pgrep", ["-f", "simctl io \(udid) recordVideo"])) ?? ""
+        let pids = output.split(separator: "\n").compactMap { pid_t($0.trimmingCharacters(in: .whitespaces)) }
+        guard !pids.isEmpty else { return }
+        for pid in pids {
+            log("[recorder] Killing stale recordVideo process PID=\(pid)")
+            kill(pid, SIGINT)
+        }
+        try await Task.sleep(for: .seconds(1))  // allow stale process to finalize before starting new one
+    }
 
     private func findBootedUDID() async throws -> String {
         let json = try await shell("/usr/bin/xcrun", ["simctl", "list", "devices", "booted", "--json"])

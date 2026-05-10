@@ -27,6 +27,10 @@ actor WDAManager {
     private var xcodebuildProcess: Process?
     private var sessionId: String?
     private var wdaPort: Int = 8100
+
+    // Remembered from the last explicit start() call — used for auto-start.
+    private var lastUDID: String?
+    private var lastWDAPath: String?
     private let urlSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
@@ -40,16 +44,12 @@ actor WDAManager {
 
     /// Start WDA for the given simulator UDID using xcodebuild.
     func start(udid: String, wdaProjectPath: String, port: Int = 8100) async throws {
+        self.lastUDID    = udid
+        self.lastWDAPath = wdaProjectPath
         self.wdaPort = port
 
-        if let existing = xcodebuildProcess, existing.isRunning {
-            existing.terminate()
-            // Offload waitUntilExit to a background thread — blocking inside an actor
-            // method holds a cooperative thread pool thread for the entire duration.
-            let proc = existing
-            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                DispatchQueue.global().async { proc.waitUntilExit(); cont.resume() }
-            }
+        if xcodebuildProcess != nil {
+            await stop()  // properly waits for xcodebuild to exit and clears state
         }
         sessionId = nil
 
@@ -92,13 +92,60 @@ actor WDAManager {
         throw WDAError.startTimeout
     }
 
-    func stop() {
-        xcodebuildProcess?.terminate()
+    func stop() async {
+        guard let proc = xcodebuildProcess else { return }
+        proc.terminate()
+        // Wait for xcodebuild to fully exit before returning — callers that immediately
+        // call start() need the port to be free or the new xcodebuild will fail early.
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async { proc.waitUntilExit(); cont.resume() }
+        }
         xcodebuildProcess = nil
         sessionId = nil
     }
 
     var isRunning: Bool { xcodebuildProcess?.isRunning == true }
+
+    /// Auto-start WDA if it is not already running.
+    /// Called automatically before any UI interaction — the user never needs to call start_wda explicitly.
+    /// Requires the binary to be launched from the repo root so the Vendor/WebDriverAgent submodule is resolvable.
+    func ensureRunning(simManager: SimulatorManager) async throws {
+        guard !isRunning else { return }
+
+        let udid: String
+        if let cached = lastUDID {
+            udid = cached
+        } else {
+            udid = try await simManager.bootedUDID()
+            lastUDID = udid
+        }
+
+        let wdaPath: String
+        if let cached = lastWDAPath {
+            wdaPath = cached
+        } else {
+            // Resolve bundled Vendor/WebDriverAgent (same logic as resolveWDAPath in WDATools.swift)
+            let binaryURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+            let candidate = binaryURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Vendor/WebDriverAgent/WebDriverAgent.xcodeproj").path
+            guard FileManager.default.fileExists(atPath: candidate) else {
+                throw WDAError.sessionFailed(
+                    "WDA not running and Vendor/WebDriverAgent submodule not found. Run Scripts/setup.sh or call start_wda with wda_project_path."
+                )
+            }
+            wdaPath = candidate
+            lastWDAPath = candidate
+        }
+
+        log("[WDA] Auto-starting WDA for \(udid)")
+        try await start(udid: udid, wdaProjectPath: wdaPath, port: wdaPort)
+        try await waitForReady()
+        _ = try await session()  // eagerly create session
+        log("[WDA] Auto-start complete")
+    }
 
     // MARK: - Session
 
@@ -142,54 +189,150 @@ actor WDAManager {
         sessionId = nil
     }
 
+    // MARK: - Auto-reconnect
+
+    /// Executes an action. If it fails with a session error (404/500), clears the cached
+    /// session and retries once. This handles the common case where WDA restarted between
+    /// calls and the old sessionId is stale.
+    private func withAutoReconnect<T>(_ action: () async throws -> T) async throws -> T {
+        do {
+            return try await action()
+        } catch WDAError.httpError(let code, _) where code == 404 || code == 500 {
+            log("[WDA] Session error (HTTP \(code)) — clearing session and retrying once")
+            sessionId = nil
+            return try await action()
+        }
+    }
+
     // MARK: - UI Actions
 
     func tap(x: Double, y: Double) async throws {
-        let sid = try await session()
-        let body = WDAActionsRequest.tap(x: x, y: y)
-        _ = try await post("/session/\(sid)/actions", body: body)
+        try await withAutoReconnect {
+            let sid = try await self.session()
+            let body = WDAActionsRequest.tap(x: x, y: y)
+            _ = try await self.post("/session/\(sid)/actions", body: body)
+        }
     }
 
     func longPress(x: Double, y: Double, durationSeconds: Double) async throws {
-        let sid = try await session()
-        let body = WDAActionsRequest.longPress(x: x, y: y, durationMs: Int(durationSeconds * 1000))
-        _ = try await post("/session/\(sid)/actions", body: body)
+        try await withAutoReconnect {
+            let sid = try await self.session()
+            let body = WDAActionsRequest.longPress(x: x, y: y, durationMs: Int(durationSeconds * 1000))
+            _ = try await self.post("/session/\(sid)/actions", body: body)
+        }
     }
 
     func swipe(fromX: Double, fromY: Double, toX: Double, toY: Double, durationSeconds: Double = 0.5) async throws {
-        let sid = try await session()
-        let body = WDAActionsRequest.swipe(fromX: fromX, fromY: fromY, toX: toX, toY: toY,
-                                           durationMs: Int(durationSeconds * 1000))
-        _ = try await post("/session/\(sid)/actions", body: body)
+        try await withAutoReconnect {
+            let sid = try await self.session()
+            let body = WDAActionsRequest.swipe(fromX: fromX, fromY: fromY, toX: toX, toY: toY,
+                                               durationMs: Int(durationSeconds * 1000))
+            _ = try await self.post("/session/\(sid)/actions", body: body)
+        }
     }
 
     func typeText(_ text: String) async throws {
-        let sid = try await session()
-        let body = WDAKeysRequest.make(text)
-        _ = try await post("/session/\(sid)/wda/keys", body: body)
+        try await withAutoReconnect {
+            let sid = try await self.session()
+            let body = WDAKeysRequest.make(text)
+            _ = try await self.post("/session/\(sid)/wda/keys", body: body)
+        }
     }
 
     func pressButton(_ name: String) async throws {
-        let sid = try await session()
-        let body = WDAButtonRequest(name: name)
-        _ = try await post("/session/\(sid)/wda/pressButton", body: body)
+        try await withAutoReconnect {
+            let sid = try await self.session()
+            let body = WDAButtonRequest(name: name)
+            _ = try await self.post("/session/\(sid)/wda/pressButton", body: body)
+        }
     }
 
     func shake() async throws {
-        let sid = try await session()
-        _ = try await post("/session/\(sid)/wda/shake", body: EmptyBody())
+        try await withAutoReconnect {
+            let sid = try await self.session()
+            _ = try await self.post("/session/\(sid)/wda/shake", body: EmptyBody())
+        }
+    }
+
+    // MARK: - Element search
+
+    /// Find elements matching a query string (searches name, label, value — case-insensitive).
+    /// Returns matching elements with their center coordinates.
+    nonisolated static func findElements(
+        matching query: String, in xml: String
+    ) -> [(label: String, type: String, centerX: Double, centerY: Double, frame: String)] {
+        guard let data = xml.data(using: .utf8),
+              let doc  = try? XMLDocument(data: data, options: []) else { return [] }
+
+        let q = query.lowercased()
+        var results: [(label: String, type: String, centerX: Double, centerY: Double, frame: String)] = []
+
+        func walk(_ node: XMLNode) {
+            if let el = node as? XMLElement {
+                let visible = el.attribute(forName: "visible")?.stringValue != "false"
+                if visible {
+                    let name  = el.attribute(forName: "name")?.stringValue  ?? ""
+                    let label = el.attribute(forName: "label")?.stringValue ?? ""
+                    let value = el.attribute(forName: "value")?.stringValue ?? ""
+
+                    if name.lowercased().contains(q) || label.lowercased().contains(q) || value.lowercased().contains(q) {
+                        if let ex = el.attribute(forName: "x")?.stringValue.flatMap(Double.init),
+                           let ey = el.attribute(forName: "y")?.stringValue.flatMap(Double.init),
+                           let ew = el.attribute(forName: "width")?.stringValue.flatMap(Double.init),
+                           let eh = el.attribute(forName: "height")?.stringValue.flatMap(Double.init),
+                           ew > 0, eh > 0 {
+                            let displayLabel = [name, label, value].first(where: { !$0.isEmpty }) ?? ""
+                            results.append((
+                                label:   displayLabel,
+                                type:    el.name ?? "Unknown",
+                                centerX: ex + ew / 2,
+                                centerY: ey + eh / 2,
+                                frame:   "(\(Int(ex)),\(Int(ey))  \(Int(ew))×\(Int(eh)))"
+                            ))
+                        }
+                    }
+                }
+            }
+            for child in node.children ?? [] { walk(child) }
+        }
+
+        if let root = doc.rootElement() { walk(root) }
+        return results
+    }
+
+    /// Find elements matching the query and return a text description (no tap).
+    func findElement(matching query: String) async throws -> String {
+        let xml     = try await uiSource()
+        let matches = Self.findElements(matching: query, in: xml)
+        if matches.isEmpty { return "No element matching \"\(query)\" found on screen." }
+        return matches.map { m in
+            "[\(m.type.replacingOccurrences(of: "XCUIElementType", with: ""))] \"\(m.label)\"  center:(\(Int(m.centerX)),\(Int(m.centerY)))  frame:\(m.frame)"
+        }.joined(separator: "\n")
+    }
+
+    /// Find the first visible element matching the query and tap its centre.
+    func tapElement(matching query: String) async throws -> String {
+        let xml     = try await uiSource()
+        let matches = Self.findElements(matching: query, in: xml)
+        guard let match = matches.first else {
+            return "No element matching \"\(query)\" found on screen. Use ui_describe_all to see what's visible."
+        }
+        try await tap(x: match.centerX, y: match.centerY)
+        return "Tapped \"\(match.label)\" at (\(Int(match.centerX)), \(Int(match.centerY)))"
     }
 
     func uiSource() async throws -> String {
-        let sid = try await session()
-        let data = try await get("/session/\(sid)/source")
-        // WDA wraps the XML in a JSON envelope: {"value": "<?xml...>", "sessionId": "..."}
-        // Unwrap it so callers get raw XML.
-        struct SourceResp: Decodable { let value: String }
-        if let resp = try? JSONDecoder().decode(SourceResp.self, from: data), !resp.value.isEmpty {
-            return resp.value
+        try await withAutoReconnect {
+            let sid = try await self.session()
+            let data = try await self.get("/session/\(sid)/source")
+            // WDA wraps the XML in a JSON envelope: {"value": "<?xml...>", "sessionId": "..."}
+            // Unwrap it so callers get raw XML.
+            struct SourceResp: Decodable { let value: String }
+            if let resp = try? JSONDecoder().decode(SourceResp.self, from: data), !resp.value.isEmpty {
+                return resp.value
+            }
+            return String(data: data, encoding: .utf8) ?? ""
         }
-        return String(data: data, encoding: .utf8) ?? ""
     }
 
     /// Describe the element at a point.
@@ -373,18 +516,6 @@ actor WDAManager {
             lines.append("  \(n): \(v)")
         }
         return lines.joined(separator: "\n")
-    }
-
-    func launchApp(bundleId: String) async throws {
-        let sid = try await session()
-        let body = WDAActivateAppRequest(bundleId: bundleId)
-        _ = try await post("/session/\(sid)/wda/apps/activate", body: body)
-    }
-
-    func terminateApp(bundleId: String) async throws {
-        let sid = try await session()
-        let body = WDATerminateAppRequest(bundleId: bundleId)
-        _ = try await post("/session/\(sid)/wda/apps/terminate", body: body)
     }
 
     // MARK: - HTTP helpers

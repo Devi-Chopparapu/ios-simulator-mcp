@@ -149,10 +149,11 @@ func screenshot(_ args: [String: Value]?, manager: SimulatorManager) async throw
         udid = try await manager.bootedUDID()
     }
 
-    let format   = args?["type"]?.stringValue     ?? "png"
-    // scale=0.5 on a 3× Retina device (~9× fewer vision tokens vs native, still sharp).
+    // Default jpeg — ~3× smaller than png for UI screenshots, big token saving.
+    let format   = args?["type"]?.stringValue ?? "jpeg"
+    // scale=0.3 on a 3× Retina device ≈ ~11× fewer tokens vs native, still readable.
     // Pass scale=1.0 for full native resolution.
-    let scale    = args?["scale"]?.numericDoubleValue ?? 0.5
+    let scale    = args?["scale"]?.numericDoubleValue ?? 0.3
     let mimeType = format == "jpeg" ? "image/jpeg" : "image/png"
     let ext      = format == "jpeg" ? "jpg" : "png"
     let uuid     = UUID().uuidString
@@ -161,13 +162,25 @@ func screenshot(_ args: [String: Value]?, manager: SimulatorManager) async throw
     _ = try await shell("/usr/bin/xcrun", ["simctl", "io", udid, "screenshot", "--type", format, fullPath])
     defer { try? FileManager.default.removeItem(atPath: fullPath) }
 
+    // save_to_path: save the screenshot to disk and return only the path — zero vision tokens.
+    // Use this when you need to capture but don't need Claude to analyse the image.
+    if let savePath = args?["save_to_path"]?.stringValue {
+        // Remove existing file first so copyItem/write don't fail silently on overwrite.
+        try? FileManager.default.removeItem(atPath: savePath)
+        if scale > 0 && scale < 1.0,
+           let scaledData = await downscaleImage(at: fullPath, scale: scale, ext: ext) {
+            try? scaledData.write(to: URL(fileURLWithPath: savePath))
+        } else {
+            try? FileManager.default.copyItem(atPath: fullPath, toPath: savePath)
+        }
+        return .text("Screenshot saved to \(savePath)")
+    }
+
     guard let fullData = FileManager.default.contents(atPath: fullPath) else {
         return .text("Screenshot taken but could not read file at \(fullPath)")
     }
 
     // Downscale via sips (built-in macOS) when scale < 1.0.
-    // This dramatically reduces vision token cost: a 3× Retina screenshot at scale=0.5
-    // is ~589×1278 px instead of 1179×2556 — roughly 4× fewer tokens.
     // On failure we fall through to the full-res image rather than erroring.
     var imageData = fullData
     if scale > 0 && scale < 1.0 {
@@ -206,9 +219,11 @@ private func downscaleImage(at path: String, scale: Double, ext: String) async -
 // MARK: - record_video
 
 func recordVideo(_ args: [String: Value]?, manager: SimulatorManager) async throws -> CallTool.Result {
-    guard let outputPath = args?["output_path"]?.stringValue else {
-        return .text("Error: 'output_path' is required.")
-    }
+    // Default: ~/Movies/recording.mov — same location QuickTime Player uses, always accessible.
+    let moviesDir = (NSHomeDirectory() as NSString).appendingPathComponent("Movies")
+    try? FileManager.default.createDirectory(atPath: moviesDir, withIntermediateDirectories: true)
+    let outputPath = args?["output_path"]?.stringValue
+        ?? (moviesDir as NSString).appendingPathComponent("recording.mov")
 
     let udid: String
     if let provided = args?["udid"]?.stringValue {
@@ -307,12 +322,12 @@ func wait(_ args: [String: Value]?) async throws -> CallTool.Result {
     return .text("Waited \(seconds) seconds.")
 }
 
-// MARK: - launch_app
+// MARK: - find_app
 
-/// Launch an app by bundle ID using xcrun simctl. Does not require WDA.
-func launchApp(_ args: [String: Value]?, manager: SimulatorManager) async throws -> CallTool.Result {
-    guard let bundleId = args?["bundle_id"]?.stringValue else {
-        return .text("Error: 'bundle_id' is required.")
+/// Find an installed app by name (case-insensitive substring match) and return its bundle ID.
+func findApp(_ args: [String: Value]?, manager: SimulatorManager) async throws -> CallTool.Result {
+    guard let name = args?["name"]?.stringValue, !name.isEmpty else {
+        return .text("Error: 'name' is required.")
     }
     let udid: String
     if let provided = args?["udid"]?.stringValue {
@@ -320,6 +335,99 @@ func launchApp(_ args: [String: Value]?, manager: SimulatorManager) async throws
     } else {
         udid = try await manager.bootedUDID()
     }
+
+    // Use `defaults` to read the app registry plist that simctl writes.
+    // More reliable than parsing simctl listapps plist output directly.
+    let raw = try await shell("/usr/bin/xcrun", ["simctl", "listapps", udid])
+
+    // Convert XML plist string → Data → NSDictionary
+    guard let plistData = raw.data(using: .utf8) else {
+        return .text("Error: could not read app list output.")
+    }
+
+    var format = PropertyListSerialization.PropertyListFormat.xml
+    guard let plist = try? PropertyListSerialization.propertyList(
+            from: plistData, options: [], format: &format),
+          let apps = plist as? [String: Any] else {
+        // Fallback: grep bundle IDs and display names from the raw plist text
+        let q = name.lowercased()
+        let lines = raw.components(separatedBy: "\n")
+        var bundleIds: [String] = []
+        for (i, line) in lines.enumerated() {
+            if line.contains("CFBundleIdentifier") {
+                // Next non-empty line has the value
+                let valueLine = lines.dropFirst(i + 1).first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
+                if let id = valueLine.components(separatedBy: ">").dropFirst().first?.components(separatedBy: "<").first,
+                   id.lowercased().contains(q) {
+                    bundleIds.append(id)
+                }
+            }
+        }
+        if bundleIds.isEmpty {
+            return .text("No app matching \"\(name)\" found. Make sure the app is installed on the simulator — do not build it, ask the user to install it.")
+        }
+        return .text(bundleIds.map { "  \($0)" }.joined(separator: "\n"))
+    }
+
+    let q = name.lowercased()
+    var matches: [(bundleId: String, displayName: String)] = []
+
+    for (bundleId, value) in apps {
+        guard let info = value as? [String: Any] else { continue }
+        let displayName = (info["CFBundleDisplayName"] as? String)
+            ?? (info["CFBundleName"] as? String)
+            ?? bundleId
+        if displayName.lowercased().contains(q) || bundleId.lowercased().contains(q) {
+            matches.append((bundleId, displayName))
+        }
+    }
+
+    if matches.isEmpty {
+        return .text("No app matching \"\(name)\" found on the simulator. The app must be installed by the user — do not attempt to build or install it.")
+    }
+
+    return .text(matches
+        .sorted { $0.displayName < $1.displayName }
+        .map { "  \($0.displayName)  →  \($0.bundleId)" }
+        .joined(separator: "\n"))
+}
+
+// MARK: - launch_app
+
+/// Launch an app by bundle ID or display name using xcrun simctl. Does not require WDA.
+/// If `name` is provided instead of `bundle_id`, the installed app list is searched first.
+func launchApp(_ args: [String: Value]?, manager: SimulatorManager) async throws -> CallTool.Result {
+    let udid: String
+    if let provided = args?["udid"]?.stringValue {
+        udid = provided
+    } else {
+        udid = try await manager.bootedUDID()
+    }
+
+    let bundleId: String
+    if let explicit = args?["bundle_id"]?.stringValue {
+        bundleId = explicit
+    } else if let name = args?["name"]?.stringValue, !name.isEmpty {
+        // Resolve name → bundle ID via simctl listapps
+        let json = try await shell("/usr/bin/xcrun", ["simctl", "listapps", udid])
+        guard let plistData = json.data(using: .utf8),
+              let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil),
+              let apps = plist as? [String: [String: Any]] else {
+            return .text("Error: could not read installed apps list.")
+        }
+        let q = name.lowercased()
+        let match = apps.first(where: { (bid, info) in
+            let dn = (info["CFBundleDisplayName"] as? String) ?? (info["CFBundleName"] as? String) ?? bid
+            return dn.lowercased().contains(q) || bid.lowercased().contains(q)
+        })
+        guard let found = match else {
+            return .text("Error: no app matching \"\(name)\" found. Use find_app to list installed apps.")
+        }
+        bundleId = found.key
+    } else {
+        return .text("Error: provide 'bundle_id' or 'name'.")
+    }
+
     _ = try await shell("/usr/bin/xcrun", ["simctl", "launch", udid, bundleId])
     return .text("Launched app: \(bundleId)")
 }
