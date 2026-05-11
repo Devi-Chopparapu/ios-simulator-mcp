@@ -66,6 +66,8 @@ swift build -c release
 ## Demo
 
 https://github.com/GovardhanaDevi/ios-simulator-mcp/raw/main/presentation/Aruku_test_1080.mov
+<img width="800" height="478" alt="Aruku_test_1080_new" src="https://github.com/user-attachments/assets/3c8cd5df-0bed-40da-92c5-13cd58715d55" />
+
 
 ---
 
