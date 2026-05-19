@@ -28,7 +28,7 @@ ios-simulator-mcp  ──→  xcrun simctl     (boot, screenshot, video, locatio
 
 ```bash
 # Clone with submodules (WebDriverAgent is vendored at Vendor/WebDriverAgent)
-git clone --recurse-submodules https://github.com/GovardhanaDevi/ios-simulator-mcp.git
+git clone --recurse-submodules https://github.com/Devi-Chopparapu/ios-simulator-mcp.git
 cd ios-simulator-mcp
 
 # One-time setup: bootstraps WDA and builds the release binary
@@ -60,14 +60,6 @@ claude mcp add ios-simulator -- "$PWD/.build/release/ios-simulator-mcp"
 ```bash
 swift build -c release
 ```
-
----
-
-## Demo
-
-https://github.com/GovardhanaDevi/ios-simulator-mcp/raw/main/presentation/Aruku_test_1080.mov
-<img width="800" height="478" alt="Aruku_test_1080_new" src="https://github.com/user-attachments/assets/3c8cd5df-0bed-40da-92c5-13cd58715d55" />
-
 
 ---
 
